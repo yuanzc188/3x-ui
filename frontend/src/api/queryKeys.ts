@@ -31,4 +31,8 @@ export const keys = {
     config: () => ['xray', 'config'] as const,
     outboundsTraffic: () => ['xray', 'outboundsTraffic'] as const,
   },
+  portForward: {
+    root: () => ['portForward'] as const,
+    list: () => ['portForward', 'list'] as const,
+  },
 } as const;
