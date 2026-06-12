@@ -5,19 +5,19 @@
 
 ## 1. 背景与目标
 
-当前要把某个入站的流量转发到一个 socks5 代理，需要手动编辑 Xray 配置：
-加一个 `socks` 出站、再加一条 `routing` 规则（`inboundTag → outboundTag`），非常繁琐。
+当前要把某个入站的流量转发到一个代理（socks5 或 http），需要手动编辑 Xray 配置：
+加一个 `socks`/`http` 出站、再加一条 `routing` 规则（`inboundTag → outboundTag`），非常繁琐。
 
-目标：提供一个可视化页面，选中一个已有入站、填入 socks5 目标，面板自动生成
-对应的 socks 出站 + 路由规则，并热重载生效。
+目标：提供一个可视化页面，选中一个已有入站、选择目标类型（socks5/http）并填入目标，
+面板自动生成对应出站 + 路由规则，并热重载生效。
 
 ### 典型链路
 
-客户端 → (vless/vmess 等代理入站，加密+认证) → 本机 → (socks5 出站) → 目标。
+客户端 → (vless/vmess 等代理入站，加密+认证) → 本机 → (socks5/http 出站) → 目标。
 
-转发功能负责「出」的那一段：为代理入站指定一个 socks5 出口。
+转发功能负责「出」的那一段：为代理入站指定一个 socks5 或 http 出口。
 **不使用 dokodemo-door/tunnel 作为转发入站**——实际转发用 vless/vmess 等代理协议入站，
-目标地址由客户端请求决定，服务端再经 socks5 转出。
+目标地址由客户端请求决定，服务端再经代理转出。
 
 ## 2. 架构总览
 
@@ -38,8 +38,9 @@ type ForwardRule struct {
     Id          int    `json:"id" gorm:"primaryKey;autoIncrement"`
     InboundTag  string `json:"inboundTag" form:"inboundTag" gorm:"unique"` // 绑定的入站 tag，唯一
     Remark      string `json:"remark" form:"remark"`                        // 备注
-    DestAddress string `json:"destAddress" form:"destAddress"`              // socks5 地址
-    DestPort    int    `json:"destPort" form:"destPort"`                    // socks5 端口
+    DestType    string `json:"destType" form:"destType"`                    // 目标类型：socks | http
+    DestAddress string `json:"destAddress" form:"destAddress"`              // 代理地址
+    DestPort    int    `json:"destPort" form:"destPort"`                    // 代理端口
     Username    string `json:"username" form:"username"`                    // 可选认证
     Password    string `json:"password" form:"password"`                    // 可选认证
     Enable      bool   `json:"enable" form:"enable" gorm:"default:true"`    // 启用开关
@@ -47,9 +48,12 @@ type ForwardRule struct {
 ```
 
 约定：
+- `DestType` 取值 `socks`（socks5）或 `http`，决定注入出站的 `protocol` 字段。
 - 出站 tag：`forward-out-{id}`（自增 id，天然唯一）。
 - 路由规则：`{ "type": "field", "inboundTag": [InboundTag], "outboundTag": "forward-out-{id}" }`。
 - `InboundTag` 加唯一约束，从数据库层保证「同一入站只允许一条转发规则」。
+- socks 与 http 出站结构一致，均为 `settings.servers[]`，可选 `users:[{user,pass}]` 做认证；
+  仅 `protocol` 字段按 `DestType` 取 `socks`/`http`。
 
 ## 4. 后端
 
@@ -68,8 +72,8 @@ type ForwardRule struct {
 1. 先解析 `cfg.OutboundConfigs`（RawMessage → []any），失败则跳过整个注入。
 2. 收集当前生成配置里的入站 tag 集合（`cfg.InboundConfigs[].Tag`）。
 3. 遍历启用规则：若 `InboundTag` 不在入站集合中（孤儿规则），**跳过**（不报错）。
-4. 为每条有效规则追加 socks 出站（含可选 auth）、并向 `cfg.RouterConfig` 的 `rules`
-   追加一条 `inboundTag → forward-out-{id}` 规则。
+4. 为每条有效规则追加出站（`protocol` 按 `DestType` 取 `socks`/`http`，含可选 auth）、
+   并向 `cfg.RouterConfig` 的 `rules` 追加一条 `inboundTag → forward-out-{id}` 规则。
 5. 回写 `cfg.OutboundConfigs` 与 `cfg.RouterConfig`。
 
 出站要先于路由规则引用它存在——同一函数内先 append 出站再 append 路由，与
@@ -100,8 +104,8 @@ type ForwardRule struct {
 - `usePortForward.ts`：React Query 拉取规则列表 + mutations（增删改、启用）。
 - `list/ForwardList.tsx`：Ant Design Table，列含入站、socks5 目标、备注、
   启用开关、编辑/删除操作；孤儿规则（入站已失效）行内标记。
-- `form/ForwardFormModal.tsx`：表单 = 入站下拉 / socks5 地址 / 端口 /
-  可选用户名密码 / 备注。保存前校验「该入站是否已有规则」，已有则提示去编辑。
+- `form/ForwardFormModal.tsx`：表单 = 入站下拉 / 目标类型（socks5 / http）/
+  地址 / 端口 / 可选用户名密码 / 备注。保存前校验「该入站是否已有规则」，已有则提示去编辑。
 
 接线：
 
@@ -129,5 +133,5 @@ outbound + reload routing，不停进程）。
 ## 8. 不做的事（YAGNI）
 
 - 不在本页创建入站（已确认只绑定已有入站）。
-- 不支持非 socks5 的转发目标（如直连 IP、http 代理）——本期只做 socks5。
-- 不做多个入站复用同一 socks5 出站的去重优化——每条规则一个独立出站，删除干净。
+- 转发目标只支持 socks5 与 http 代理；不支持直连 IP（freedom）等其它出站类型。
+- 不做多个入站复用同一出站的去重优化——每条规则一个独立出站，删除干净。
