@@ -110,6 +110,7 @@
     "nodes": "节点",
     "settings": "面板设置",
     "xray": "Xray 配置",
+    "portForward": "端口转发",
     "apiDocs": "API 文档",
     "logout": "退出登录",
     "link": "管理",
@@ -1554,6 +1555,26 @@
         "edit": "编辑假 DNS",
         "ipPool": "IP 池子网",
         "poolSize": "池大小"
+      }
+    },
+    "portForward": {
+      "title": "端口转发",
+      "addRule": "新增规则",
+      "inbound": "入站",
+      "destType": "目标类型",
+      "destAddress": "地址",
+      "destPort": "端口",
+      "username": "用户名",
+      "password": "密码",
+      "remark": "备注",
+      "enable": "启用",
+      "orphanInbound": "入站已失效",
+      "duplicateInbound": "该入站已有转发规则，请直接编辑已有规则。",
+      "toasts": {
+        "obtain": "加载转发规则失败",
+        "createSuccess": "转发规则已创建",
+        "updateSuccess": "转发规则已更新",
+        "deleteSuccess": "转发规则已删除"
       }
     }
   },
