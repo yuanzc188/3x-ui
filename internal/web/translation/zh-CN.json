@@ -125,7 +125,8 @@
     "openMenu": "打开菜单",
     "pinSidebar": "固定侧边栏",
     "unpinSidebar": "取消固定侧边栏",
-    "subFormats": "Sub Formats"
+    "subFormats": "Sub Formats",
+    "portForward": "端口转发"
   },
   "pages": {
     "login": {
@@ -2255,6 +2256,26 @@
         "delete": "删除主机",
         "badTag": "无效的标签",
         "badVlessRoute": "请输入 0 到 65535 之间的单个数字"
+      }
+    },
+    "portForward": {
+      "title": "端口转发",
+      "addRule": "新增规则",
+      "inbound": "入站",
+      "destType": "目标类型",
+      "destAddress": "地址",
+      "destPort": "端口",
+      "username": "用户名",
+      "password": "密码",
+      "remark": "备注",
+      "enable": "启用",
+      "orphanInbound": "入站已失效",
+      "duplicateInbound": "该入站已有转发规则，请直接编辑已有规则。",
+      "toasts": {
+        "obtain": "加载转发规则失败",
+        "createSuccess": "转发规则已创建",
+        "updateSuccess": "转发规则已更新",
+        "deleteSuccess": "转发规则已删除"
       }
     }
   },

@@ -125,7 +125,8 @@
     "openMenu": "Open menu",
     "pinSidebar": "Pin sidebar",
     "unpinSidebar": "Unpin sidebar",
-    "subFormats": "Sub Formats"
+    "subFormats": "Sub Formats",
+    "portForward": "Port Forward"
   },
   "pages": {
     "login": {
@@ -2256,6 +2257,26 @@
       },
       "defaultOutbound": "Default Outbound",
       "defaultOutboundDesc": "Traffic that does not match any routing rule uses this outbound (Xray uses the first outbound in the list)."
+    },
+    "portForward": {
+      "title": "Port Forward",
+      "addRule": "Add Rule",
+      "inbound": "Inbound",
+      "destType": "Target Type",
+      "destAddress": "Address",
+      "destPort": "Port",
+      "username": "Username",
+      "password": "Password",
+      "remark": "Remark",
+      "enable": "Enable",
+      "orphanInbound": "Inbound missing",
+      "duplicateInbound": "This inbound already has a forward rule. Edit the existing one instead.",
+      "toasts": {
+        "obtain": "Failed to load forward rules",
+        "createSuccess": "Forward rule created",
+        "updateSuccess": "Forward rule updated",
+        "deleteSuccess": "Forward rule deleted"
+      }
     }
   },
   "tgbot": {
