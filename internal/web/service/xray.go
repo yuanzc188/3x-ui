@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -282,6 +283,15 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		injectPanelEgress(xrayConfig, egressTag)
 	}
 
+	// Inject port-forwarding rules: each enabled rule becomes a socks/http
+	// outbound + a routing rule. Source of truth is the forward_rules table;
+	// the stored template is never modified.
+	if forwardRules, err := (&ForwardService{}).ActiveRules(); err != nil {
+		logger.Warning("read forward rules failed:", err)
+	} else if len(forwardRules) > 0 {
+		injectForwardRules(xrayConfig, forwardRules)
+	}
+
 	return xrayConfig, nil
 }
 
@@ -410,6 +420,91 @@ func mergeSubscriptionOutbounds(cfg *xray.Config, prepend, appendList []any) {
 		return
 	}
 	cfg.OutboundConfigs = json_util.RawMessage(combined)
+}
+
+// injectForwardRules appends, for each enabled forward rule whose inbound exists
+// in the generated config, a socks/http outbound (tag forward-out-{id}) plus a
+// routing rule sending that inbound's traffic to it. Like injectPanelEgress it
+// works only on the generated config — the stored template is never modified —
+// and the additions are hot-appliable, so toggling a rule never restarts core.
+//
+// Safety: if the template's outbounds or routing section is unparsable, the
+// function returns without touching the config, mirroring mergeSubscriptionOutbounds.
+func injectForwardRules(cfg *xray.Config, rules []model.ForwardRule) {
+	if len(rules) == 0 {
+		return
+	}
+
+	// Existing inbound tags — orphan rules (inbound deleted) are skipped.
+	inboundTags := make(map[string]struct{}, len(cfg.InboundConfigs))
+	for i := range cfg.InboundConfigs {
+		inboundTags[cfg.InboundConfigs[i].Tag] = struct{}{}
+	}
+
+	var outbounds []any
+	if len(cfg.OutboundConfigs) > 0 {
+		if err := json.Unmarshal(cfg.OutboundConfigs, &outbounds); err != nil {
+			logger.Warning("forward rules: outbounds unparsable, skipping injection:", err)
+			return
+		}
+	}
+
+	routing := map[string]any{}
+	if len(cfg.RouterConfig) > 0 {
+		if err := json.Unmarshal(cfg.RouterConfig, &routing); err != nil {
+			logger.Warning("forward rules: routing unparsable, skipping injection:", err)
+			return
+		}
+	}
+	rulesArr, _ := routing["rules"].([]any)
+
+	added := 0
+	for _, r := range rules {
+		if !r.Enable {
+			continue
+		}
+		if _, ok := inboundTags[r.InboundTag]; !ok {
+			continue
+		}
+		protocol := "socks"
+		if r.DestType == "http" {
+			protocol = "http"
+		}
+		server := map[string]any{"address": r.DestAddress, "port": r.DestPort}
+		if r.Username != "" || r.Password != "" {
+			server["users"] = []any{map[string]any{"user": r.Username, "pass": r.Password}}
+		}
+		outTag := fmt.Sprintf("forward-out-%d", r.Id)
+		outbounds = append(outbounds, map[string]any{
+			"protocol": protocol,
+			"tag":      outTag,
+			"settings": map[string]any{"servers": []any{server}},
+		})
+		rulesArr = append(rulesArr, map[string]any{
+			"type":        "field",
+			"inboundTag":  []any{r.InboundTag},
+			"outboundTag": outTag,
+		})
+		added++
+	}
+	if added == 0 {
+		return
+	}
+
+	newOut, err := json.MarshalIndent(outbounds, "", "  ")
+	if err != nil {
+		logger.Warning("forward rules: failed to rebuild outbounds, skipping injection:", err)
+		return
+	}
+	cfg.OutboundConfigs = json_util.RawMessage(newOut)
+
+	routing["rules"] = rulesArr
+	newRouting, err := json.Marshal(routing)
+	if err != nil {
+		logger.Warning("forward rules: failed to rebuild routing, skipping injection:", err)
+		return
+	}
+	cfg.RouterConfig = json_util.RawMessage(newRouting)
 }
 
 // ensureAPIServices guarantees the gRPC services the panel depends on are
