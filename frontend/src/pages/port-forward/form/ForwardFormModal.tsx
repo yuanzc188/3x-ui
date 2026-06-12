@@ -47,8 +47,10 @@ export default function ForwardFormModal({ open, editing, rules, onCancel, onSav
       messageApi.error(t('pages.portForward.duplicateInbound'));
       return;
     }
-    await onSave({ ...editing, ...values });
-    onCancel();
+    const res = (await onSave({ ...editing, ...values })) as { success?: boolean } | undefined;
+    if (res?.success) {
+      onCancel();
+    }
   };
 
   return (
