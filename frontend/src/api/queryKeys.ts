@@ -51,4 +51,8 @@ export const keys = {
         ['xray', 'geodata', 'entries', file, code, query, offset, limit] as const,
     },
   },
+  portForward: {
+    root: () => ['portForward'] as const,
+    list: () => ['portForward', 'list'] as const,
+  },
 } as const;
