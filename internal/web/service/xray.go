@@ -460,6 +460,8 @@ func injectForwardRules(cfg *xray.Config, rules []model.ForwardRule) {
 
 	added := 0
 	for _, r := range rules {
+		// This helper independently honors Enable so it stays correct for any
+		// caller, even though ActiveRules() already pre-filters at the DB layer.
 		if !r.Enable {
 			continue
 		}
@@ -496,14 +498,15 @@ func injectForwardRules(cfg *xray.Config, rules []model.ForwardRule) {
 		logger.Warning("forward rules: failed to rebuild outbounds, skipping injection:", err)
 		return
 	}
-	cfg.OutboundConfigs = json_util.RawMessage(newOut)
-
 	routing["rules"] = rulesArr
 	newRouting, err := json.Marshal(routing)
 	if err != nil {
 		logger.Warning("forward rules: failed to rebuild routing, skipping injection:", err)
 		return
 	}
+	// Assign both only after both marshals succeed, so a routing failure can
+	// never leave an injected outbound without its matching route.
+	cfg.OutboundConfigs = json_util.RawMessage(newOut)
 	cfg.RouterConfig = json_util.RawMessage(newRouting)
 }
 

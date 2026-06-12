@@ -90,3 +90,24 @@ func TestInjectForwardRules_SkipsOrphanAndDisabled(t *testing.T) {
 		t.Fatalf("orphan + disabled rules must inject nothing, got %d outbounds", len(outbounds))
 	}
 }
+
+func TestInjectForwardRules_LeavesCfgUntouchedOnParseError(t *testing.T) {
+	cfg := baseCfgWithInbound("in-1000-tcp")
+	cfg.OutboundConfigs = json_util.RawMessage(`this is not valid json`)
+	origOut := string(cfg.OutboundConfigs)
+	origRouting := string(cfg.RouterConfig)
+
+	rules := []model.ForwardRule{{
+		Id: 1, InboundTag: "in-1000-tcp", DestType: "socks",
+		DestAddress: "9.9.9.9", DestPort: 1080, Enable: true,
+	}}
+
+	injectForwardRules(cfg, rules)
+
+	if string(cfg.OutboundConfigs) != origOut {
+		t.Fatalf("OutboundConfigs must be untouched on parse error, got %q", string(cfg.OutboundConfigs))
+	}
+	if string(cfg.RouterConfig) != origRouting {
+		t.Fatalf("RouterConfig must be untouched on parse error, got %q", string(cfg.RouterConfig))
+	}
+}
