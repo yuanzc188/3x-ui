@@ -11,6 +11,7 @@ const NodesPage = lazy(() => import('@/pages/nodes/NodesPage'));
 const SettingsPage = lazy(() => import('@/pages/settings/SettingsPage'));
 const XrayPage = lazy(() => import('@/pages/xray/XrayPage'));
 const ApiDocsPage = lazy(() => import('@/pages/api-docs/ApiDocsPage'));
+const PortForwardPage = lazy(() => import('@/pages/port-forward/PortForwardPage'));
 
 function withSuspense(node: React.ReactNode) {
   return <Suspense fallback={null}>{node}</Suspense>;
@@ -28,6 +29,7 @@ const routes: RouteObject[] = [
       { path: 'nodes', element: withSuspense(<NodesPage />) },
       { path: 'settings', element: withSuspense(<SettingsPage />) },
       { path: 'xray', element: withSuspense(<XrayPage />) },
+      { path: 'port-forward', element: withSuspense(<PortForwardPage />) },
       { path: 'api-docs', element: withSuspense(<ApiDocsPage />) },
     ],
   },

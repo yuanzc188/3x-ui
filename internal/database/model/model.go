@@ -725,6 +725,22 @@ type OutboundSubscription struct {
 	OutboundCount        int    `json:"outboundCount" gorm:"-"`
 }
 
+// ForwardRule binds an inbound (by tag) to a socks/http proxy egress.
+// Rules are the source of truth for the port-forwarding feature; they are
+// injected into the generated Xray config at build time and never written
+// into the stored xrayTemplateConfig. One rule per inbound (Tag is unique).
+type ForwardRule struct {
+	Id          int    `json:"id" gorm:"primaryKey;autoIncrement"`
+	InboundTag  string `json:"inboundTag" form:"inboundTag" gorm:"unique" validate:"required"`
+	Remark      string `json:"remark" form:"remark"`
+	DestType    string `json:"destType" form:"destType" validate:"required,oneof=socks http"`
+	DestAddress string `json:"destAddress" form:"destAddress" validate:"required"`
+	DestPort    int    `json:"destPort" form:"destPort" validate:"required,min=1,max=65535"`
+	Username    string `json:"username" form:"username"`
+	Password    string `json:"password" form:"password"`
+	Enable      bool   `json:"enable" form:"enable" gorm:"default:true"`
+}
+
 func MergeClientRecord(existing *ClientRecord, incoming *ClientRecord) []ClientMergeConflict {
 	var conflicts []ClientMergeConflict
 	keep := func(field string, oldV, newV, kept any) {

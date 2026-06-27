@@ -87,6 +87,10 @@ func (a *APIController) initRouter(g *gin.RouterGroup) {
 	a.settingController = NewSettingController(api)
 	a.xraySettingController = NewXraySettingController(api)
 
+	// Port-forwarding rules — /panel/api/forward/*
+	forward := api.Group("/forward")
+	NewForwardController(forward)
+
 	// Extra routes
 	api.POST("/backuptotgbot", a.BackuptoTgbot)
 }

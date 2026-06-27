@@ -40,7 +40,7 @@ const DONATE_URL = 'https://donate.sanaei.dev/';
 const REPO_URL = 'https://github.com/MHSanaei/3x-ui';
 const LOGOUT_KEY = '__logout__';
 
-type IconName = 'dashboard' | 'inbound' | 'team' | 'groups' | 'setting' | 'tool' | 'cluster' | 'logout' | 'apidocs' | 'outbound';
+type IconName = 'dashboard' | 'inbound' | 'team' | 'groups' | 'setting' | 'tool' | 'cluster' | 'logout' | 'apidocs' | 'outbound' | 'forward';
 
 const iconByName: Record<IconName, ComponentType> = {
   dashboard: DashboardOutlined,
@@ -53,6 +53,7 @@ const iconByName: Record<IconName, ComponentType> = {
   logout: LogoutOutlined,
   apidocs: ApiOutlined,
   outbound: UploadOutlined,
+  forward: SwapOutlined,
 };
 
 function readCollapsed(): boolean {
@@ -135,6 +136,7 @@ export default function AppSidebar() {
   const tabs = useMemo<{ key: string; icon: IconName; title: string }[]>(() => [
     { key: '/', icon: 'dashboard', title: t('menu.dashboard') },
     { key: '/inbounds', icon: 'inbound', title: t('menu.inbounds') },
+    { key: '/port-forward', icon: 'forward', title: t('menu.portForward') },
     { key: '/clients', icon: 'team', title: t('menu.clients') },
     { key: '/groups', icon: 'groups', title: t('menu.groups') },
     { key: '/nodes', icon: 'cluster', title: t('menu.nodes') },

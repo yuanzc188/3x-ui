@@ -110,6 +110,7 @@
     "nodes": "Nodes",
     "settings": "Panel Settings",
     "xray": "Xray Configs",
+    "portForward": "Port Forward",
     "apiDocs": "API Docs",
     "logout": "Log Out",
     "link": "Manage",
@@ -1555,6 +1556,26 @@
         "edit": "Edit Fake DNS",
         "ipPool": "IP Pool Subnet",
         "poolSize": "Pool Size"
+      }
+    },
+    "portForward": {
+      "title": "Port Forward",
+      "addRule": "Add Rule",
+      "inbound": "Inbound",
+      "destType": "Target Type",
+      "destAddress": "Address",
+      "destPort": "Port",
+      "username": "Username",
+      "password": "Password",
+      "remark": "Remark",
+      "enable": "Enable",
+      "orphanInbound": "Inbound missing",
+      "duplicateInbound": "This inbound already has a forward rule. Edit the existing one instead.",
+      "toasts": {
+        "obtain": "Failed to load forward rules",
+        "createSuccess": "Forward rule created",
+        "updateSuccess": "Forward rule updated",
+        "deleteSuccess": "Forward rule deleted"
       }
     }
   },
