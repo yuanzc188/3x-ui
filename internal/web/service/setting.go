@@ -171,6 +171,8 @@ var defaultValueMap = map[string]string{
 	"externalTrafficInformURI":    "",
 	"restartXrayOnClientDisable":  "true",
 	"xrayOutboundTestUrl":         "https://www.google.com/generate_204",
+	"forwardGlobalDomains":        "",
+	"forwardCheckUrl":             "http://ip-api.com/json/?fields=query,country,city",
 	"panelOutbound":               "",
 	"devChannelEnable":            "false",
 

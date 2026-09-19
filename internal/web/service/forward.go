@@ -1,6 +1,8 @@
 package service
 
 import (
+	"strings"
+
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 )
@@ -9,7 +11,46 @@ import (
 // to a socks/http proxy egress. Rules are the single source of truth and are
 // injected into the generated Xray config by injectForwardRules at build time;
 // the stored template is never modified.
-type ForwardService struct{}
+type ForwardService struct {
+	settingService SettingService
+}
+
+// ForwardSettings are the panel-wide knobs of the forwarding feature, stored
+// in the generic settings table.
+type ForwardSettings struct {
+	GlobalDomains string `json:"globalDomains" form:"globalDomains"`
+	CheckUrl      string `json:"checkUrl" form:"checkUrl"`
+}
+
+// GetSettings reads both keys, falling back to defaults for unset ones.
+func (s *ForwardService) GetSettings() (ForwardSettings, error) {
+	domains, err := s.settingService.getString("forwardGlobalDomains")
+	if err != nil {
+		return ForwardSettings{}, err
+	}
+	checkURL, err := s.settingService.getString("forwardCheckUrl")
+	if err != nil {
+		return ForwardSettings{}, err
+	}
+	return ForwardSettings{GlobalDomains: domains, CheckUrl: effectiveSettingValue("forwardCheckUrl", checkURL)}, nil
+}
+
+// SaveSettings validates the check URL (public http/https only, SSRF-safe)
+// and persists both keys. An empty URL resets to the default.
+func (s *ForwardService) SaveSettings(fs ForwardSettings) error {
+	checkURL := strings.TrimSpace(fs.CheckUrl)
+	if checkURL == "" {
+		checkURL = defaultValueMap["forwardCheckUrl"]
+	}
+	clean, err := SanitizePublicHTTPURL(checkURL, false)
+	if err != nil {
+		return err
+	}
+	if err := s.settingService.setString("forwardCheckUrl", clean); err != nil {
+		return err
+	}
+	return s.settingService.setString("forwardGlobalDomains", strings.Join(splitDomains(fs.GlobalDomains), "\n"))
+}
 
 // GetAll returns every forward rule, oldest first.
 func (s *ForwardService) GetAll() ([]model.ForwardRule, error) {
