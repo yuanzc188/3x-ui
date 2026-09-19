@@ -58,6 +58,7 @@ func migrationModels() []any {
 		&model.ClientGlobalTraffic{},
 		&model.OutboundSubscription{},
 		&model.SubBalancer{},
+		&model.ForwardRule{},
 	}
 }
 

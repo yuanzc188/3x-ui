@@ -2081,6 +2081,119 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "object"
   },
+  "ForwardRule": {
+    "description": "ForwardRule binds an inbound (by tag) to a socks/http proxy egress.\nRules are the source of truth for the port-forwarding feature; they are\ninjected into the generated Xray config at build time and never written\ninto the stored xrayTemplateConfig. One rule per inbound (Tag is unique).",
+    "properties": {
+      "checkErr": {
+        "type": "string"
+      },
+      "checkGeo": {
+        "type": "string"
+      },
+      "checkIp": {
+        "type": "string"
+      },
+      "checkMs": {
+        "type": "integer"
+      },
+      "checkOk": {
+        "type": "boolean"
+      },
+      "checkedAt": {
+        "description": "Health-check results, written only by ForwardService.CheckOne. form:\"-\"\nkeeps them out of add/update binding; Update also omits their columns.",
+        "format": "int64",
+        "type": "integer"
+      },
+      "destAddress": {
+        "type": "string"
+      },
+      "destPort": {
+        "maximum": 65535,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "destType": {
+        "enum": [
+          "socks",
+          "http"
+        ],
+        "type": "string"
+      },
+      "domainLimit": {
+        "description": "Domain whitelist, three states: DomainLimit off = unrestricted;\non with empty Domains = global list; on with Domains = this list only.",
+        "type": "boolean"
+      },
+      "domains": {
+        "description": "newline separated",
+        "type": "string"
+      },
+      "enable": {
+        "type": "boolean"
+      },
+      "expiryTime": {
+        "description": "Provider-side expiry of the proxy (ms), 0 = unset.",
+        "format": "int64",
+        "type": "integer"
+      },
+      "id": {
+        "type": "integer"
+      },
+      "inboundTag": {
+        "type": "string"
+      },
+      "password": {
+        "type": "string"
+      },
+      "remark": {
+        "type": "string"
+      },
+      "sniffingOff": {
+        "description": "List-only enrichment: the bound inbound has sniffing disabled, so the\ndomain whitelist can never match. Never persisted.",
+        "type": "boolean"
+      },
+      "username": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "checkErr",
+      "checkGeo",
+      "checkIp",
+      "checkMs",
+      "checkOk",
+      "checkedAt",
+      "destAddress",
+      "destPort",
+      "destType",
+      "domainLimit",
+      "domains",
+      "enable",
+      "expiryTime",
+      "id",
+      "inboundTag",
+      "password",
+      "remark",
+      "sniffingOff",
+      "username"
+    ],
+    "type": "object"
+  },
+  "ForwardSettings": {
+    "description": "ForwardSettings are the panel-wide knobs of the forwarding feature, stored\nin the generic settings table.",
+    "properties": {
+      "checkUrl": {
+        "type": "string"
+      },
+      "globalDomains": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "checkUrl",
+      "globalDomains"
+    ],
+    "type": "object"
+  },
   "GeoCategory": {
     "description": "GeoCategory is one code inside a database, such as geosite's \"google\".",
     "properties": {

@@ -140,6 +140,61 @@ const outboundSubscriptionBodyParams: EndpointParam[] = [
   },
 ];
 
+const forwardRuleBodyParams: EndpointParam[] = [
+  {
+    name: 'inboundTag',
+    in: 'body',
+    type: 'string',
+    desc: 'Tag of the inbound to bind (unique per rule).',
+  },
+  {
+    name: 'destType',
+    in: 'body',
+    type: 'string',
+    desc: 'Proxy protocol.',
+    enum: ['socks', 'http'],
+  },
+  { name: 'destAddress', in: 'body', type: 'string', desc: 'Proxy host.' },
+  { name: 'destPort', in: 'body', type: 'integer', desc: 'Proxy port (1-65535).' },
+  { name: 'username', in: 'body', type: 'string', desc: 'Proxy auth user.', optional: true },
+  { name: 'password', in: 'body', type: 'string', desc: 'Proxy auth password.', optional: true },
+  {
+    name: 'remark',
+    in: 'body',
+    type: 'string',
+    desc: 'Panel-only note (customer, provider…).',
+    optional: true,
+  },
+  {
+    name: 'enable',
+    in: 'body',
+    type: 'boolean',
+    desc: 'Whether the rule is active.',
+    optional: true,
+  },
+  {
+    name: 'domainLimit',
+    in: 'body',
+    type: 'boolean',
+    desc: 'Enable the domain whitelist for this inbound.',
+    optional: true,
+  },
+  {
+    name: 'domains',
+    in: 'body',
+    type: 'string',
+    desc: 'Custom newline-separated whitelist; empty falls back to the global list.',
+    optional: true,
+  },
+  {
+    name: 'expiryTime',
+    in: 'body',
+    type: 'integer',
+    desc: 'Provider-side expiry (ms since epoch), 0 = unset.',
+    optional: true,
+  },
+];
+
 const subBalancerBodyParams: EndpointParam[] = [
   {
     name: 'remark',
@@ -2544,6 +2599,92 @@ export const sections: readonly Section[] = [
             in: 'body (form)',
             type: 'boolean',
             desc: 'Skip TLS certificate verification. Default false.',
+            optional: true,
+          },
+        ],
+      },
+    ],
+  },
+
+  {
+    id: 'port-forward',
+    title: 'Port Forwarding',
+    description:
+      'Binds an inbound (by tag) to a SOCKS5/HTTP proxy egress. Rules are the source of truth and are injected into the generated Xray config as outbounds + routing rules (UDP → blackhole, optional domain whitelist, everything else → proxy). Includes proxy health checks and a provider-side expiry date.',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/panel/api/forward/list',
+        summary:
+          'List all forward rules (oldest first) with health-check results and a sniffingOff marker for inbounds whose sniffing is disabled.',
+        responseSchema: 'ForwardRule',
+        responseSchemaArray: true,
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/forward/add',
+        summary: 'Create a forward rule. One rule per inbound tag.',
+        params: forwardRuleBodyParams,
+        responseSchema: 'ForwardRule',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/forward/update/:id',
+        summary:
+          'Update a rule by id (full-row update of editable fields; health-check fields are preserved).',
+        params: [
+          { name: 'id', in: 'path', type: 'integer', desc: 'Rule id.' },
+          ...forwardRuleBodyParams,
+        ],
+        responseSchema: 'ForwardRule',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/forward/del/:id',
+        summary: 'Delete a rule by id.',
+        params: [{ name: 'id', in: 'path', type: 'integer', desc: 'Rule id.' }],
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/forward/setEnable/:id',
+        summary: 'Enable or disable a rule without touching its other fields.',
+        params: [
+          { name: 'id', in: 'path', type: 'integer', desc: 'Rule id.' },
+          { name: 'enable', in: 'body', type: 'boolean', desc: 'New enable state.' },
+        ],
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/forward/check/:id',
+        summary:
+          "Probe the rule's proxy right now (fetches the configured check URL through it) and return the rule with fresh checkOk / checkIp / checkGeo / checkMs / checkErr.",
+        params: [{ name: 'id', in: 'path', type: 'integer', desc: 'Rule id.' }],
+        responseSchema: 'ForwardRule',
+      },
+      {
+        method: 'GET',
+        path: '/panel/api/forward/settings',
+        summary: 'Read the global domain whitelist and the health-check URL.',
+        responseSchema: 'ForwardSettings',
+      },
+      {
+        method: 'POST',
+        path: '/panel/api/forward/settings',
+        summary:
+          'Save the global whitelist and check URL. The URL must be a public http(s) address; empty resets it to the default. A changed whitelist triggers an Xray reload.',
+        params: [
+          {
+            name: 'globalDomains',
+            in: 'body',
+            type: 'string',
+            desc: 'Newline-separated Xray domain matchers.',
+            optional: true,
+          },
+          {
+            name: 'checkUrl',
+            in: 'body',
+            type: 'string',
+            desc: 'URL fetched through each proxy by the health check.',
             optional: true,
           },
         ],

@@ -487,6 +487,33 @@ export interface FallbackParentInfo {
   path?: string;
 }
 
+export interface ForwardRule {
+  checkErr: string;
+  checkGeo: string;
+  checkIp: string;
+  checkMs: number;
+  checkOk: boolean;
+  checkedAt: number;
+  destAddress: string;
+  destPort: number;
+  destType: string;
+  domainLimit: boolean;
+  domains: string;
+  enable: boolean;
+  expiryTime: number;
+  id: number;
+  inboundTag: string;
+  password: string;
+  remark: string;
+  sniffingOff: boolean;
+  username: string;
+}
+
+export interface ForwardSettings {
+  checkUrl: string;
+  globalDomains: string;
+}
+
 export interface GeoCategory {
   attributes: string[];
   code: string;

@@ -530,6 +530,31 @@ export const EXAMPLES: Record<string, unknown> = {
     "masterId": 0,
     "path": ""
   },
+  "ForwardRule": {
+    "checkErr": "",
+    "checkGeo": "",
+    "checkIp": "",
+    "checkMs": 0,
+    "checkOk": false,
+    "checkedAt": 0,
+    "destAddress": "",
+    "destPort": 1,
+    "destType": "socks",
+    "domainLimit": false,
+    "domains": "",
+    "enable": false,
+    "expiryTime": 0,
+    "id": 0,
+    "inboundTag": "",
+    "password": "",
+    "remark": "",
+    "sniffingOff": false,
+    "username": ""
+  },
+  "ForwardSettings": {
+    "checkUrl": "",
+    "globalDomains": ""
+  },
   "GeoCategory": {
     "attributes": [
       "ads",

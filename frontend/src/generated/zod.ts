@@ -515,6 +515,35 @@ export const FallbackParentInfoSchema = z.object({
 });
 export type FallbackParentInfo = z.infer<typeof FallbackParentInfoSchema>;
 
+export const ForwardRuleSchema = z.object({
+  checkErr: z.string(),
+  checkGeo: z.string(),
+  checkIp: z.string(),
+  checkMs: z.number().int(),
+  checkOk: z.boolean(),
+  checkedAt: z.number().int(),
+  destAddress: z.string(),
+  destPort: z.number().int().min(1).max(65535),
+  destType: z.enum(['socks', 'http']),
+  domainLimit: z.boolean(),
+  domains: z.string(),
+  enable: z.boolean(),
+  expiryTime: z.number().int(),
+  id: z.number().int(),
+  inboundTag: z.string(),
+  password: z.string(),
+  remark: z.string(),
+  sniffingOff: z.boolean(),
+  username: z.string(),
+});
+export type ForwardRule = z.infer<typeof ForwardRuleSchema>;
+
+export const ForwardSettingsSchema = z.object({
+  checkUrl: z.string(),
+  globalDomains: z.string(),
+});
+export type ForwardSettings = z.infer<typeof ForwardSettingsSchema>;
+
 export const GeoCategorySchema = z.object({
   attributes: z.array(z.string()),
   code: z.string(),
