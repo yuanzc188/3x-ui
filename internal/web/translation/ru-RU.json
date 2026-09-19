@@ -125,7 +125,8 @@
     "openMenu": "Открыть меню",
     "pinSidebar": "Закрепить боковую панель",
     "unpinSidebar": "Открепить боковую панель",
-    "subFormats": "Форматы подписки"
+    "subFormats": "Форматы подписки",
+    "portForward": "Port Forward"
   },
   "pages": {
     "login": {
@@ -946,7 +947,11 @@
       "renewOnDayDesc": "Продлевать этого числа каждого месяца, в полночь по часовому поясу панели, вместо интервала в днях. Если в месяце такого числа нет, продление придётся на последний день. 0 — оставить режим интервала.",
       "renewsUsed": "Продлений израсходовано",
       "tuicTotalGBDesc": "TUIC не поддерживает персональные квоты трафика; задайте лимит на уровне инбаунда.",
-      "bulkAdTagHint": "Введите 32-значный hex-тег для установки или 'none' для очистки спонсорского канала на MTProto."
+      "bulkAdTagHint": "Введите 32-значный hex-тег для установки или 'none' для очистки спонсорского канала на MTProto.",
+      "renewExtend": "Renew",
+      "renewMonths": "+{{n}} month(s)",
+      "renewDisabled": "Only for clients with an expiry date",
+      "renewSuccess": "Renewed by {{n}} month(s)"
     },
     "groups": {
       "name": "Имя",
@@ -2256,6 +2261,50 @@
         "badTag": "Недопустимый тег",
         "badVlessRoute": "Введите одно число от 0 до 65535"
       }
+    },
+    "portForward": {
+      "title": "Port Forward",
+      "addRule": "Add Rule",
+      "inbound": "Inbound",
+      "destType": "Target Type",
+      "destAddress": "Address",
+      "destPort": "Port",
+      "username": "Username",
+      "password": "Password",
+      "remark": "Remark",
+      "enable": "Enable",
+      "orphanInbound": "Inbound missing",
+      "duplicateInbound": "This inbound already has a forward rule. Edit the existing one instead.",
+      "toasts": {
+        "obtain": "Failed to load forward rules",
+        "createSuccess": "Forward rule created",
+        "updateSuccess": "Forward rule updated",
+        "deleteSuccess": "Forward rule deleted",
+        "checkDone": "Check finished",
+        "settingsSaved": "Global settings saved"
+      },
+      "remarkHint": "Panel-only; customers never see it. Customer name / contact / proxy provider, etc.",
+      "domainLimit": "Domain Whitelist",
+      "domains": "Custom Whitelist",
+      "domainsHint": "One per line, Xray domain matcher syntax (domain:tiktok.com / geosite:tiktok / substring). Leave empty to use the global list. Unmatched traffic (including bare IPs) is blocked.",
+      "expiry": "Provider Expiry",
+      "expiryHint": "Expiry of the proxy IP at the provider; a daily Telegram reminder starts 3 days before. Empty = no reminder.",
+      "health": "Health",
+      "notChecked": "Not checked",
+      "checkFailed": "Check failed",
+      "checkNow": "Check now",
+      "checkedAt": "Checked at",
+      "whitelist": "Whitelist",
+      "whitelist_off": "Off",
+      "whitelist_global": "Global",
+      "whitelist_custom": "Custom",
+      "sniffingOff": "Sniffing off",
+      "sniffingOffHint": "This inbound has sniffing disabled, so the domain whitelist cannot match. Enable Sniffing in the inbound settings.",
+      "settings": "Global Settings",
+      "globalDomains": "Global Whitelist",
+      "globalDomainsHint": "One per line. Used by rules that enable the whitelist without a custom list.",
+      "checkUrl": "Check URL",
+      "checkUrlHint": "Health checks fetch this URL through each proxy; ip-api.com JSON or a plain-text IP (e.g. https://api.ipify.org). Empty restores the default."
     }
   },
   "tgbot": {

@@ -947,7 +947,11 @@
       "renewOnDayDesc": "每个自然月的这一天午夜（按面板时区）续期，而不是每 N 天续期一次。若当月没有该日期，则在当月最后一天续期。填 0 保持按天间隔模式。",
       "renewsUsed": "已用续期次数",
       "tuicTotalGBDesc": "TUIC does not support per-client traffic limits; set traffic limit on the inbound instead.",
-      "bulkAdTagHint": "输入 32 位十六进制标签以设置，或输入 'none' 清除 MTProto 赞助频道。"
+      "bulkAdTagHint": "输入 32 位十六进制标签以设置，或输入 'none' 清除 MTProto 赞助频道。",
+      "renewExtend": "续费",
+      "renewMonths": "+{{n}} 个月",
+      "renewDisabled": "仅限已设置到期时间的客户",
+      "renewSuccess": "已续费 {{n}} 个月"
     },
     "groups": {
       "name": "名称",
@@ -2275,8 +2279,32 @@
         "obtain": "加载转发规则失败",
         "createSuccess": "转发规则已创建",
         "updateSuccess": "转发规则已更新",
-        "deleteSuccess": "转发规则已删除"
-      }
+        "deleteSuccess": "转发规则已删除",
+        "checkDone": "检测完成",
+        "settingsSaved": "全局设置已保存"
+      },
+      "remarkHint": "仅面板可见，客户导入节点后看不到；可写客户姓名/微信/代理供应商等",
+      "domainLimit": "域名限制",
+      "domains": "自定义白名单",
+      "domainsHint": "每行一条，Xray 域名匹配语法（domain:tiktok.com / geosite:tiktok / 子串）。留空则使用全局白名单。开启后未匹配的流量（含直连 IP）一律拦截。",
+      "expiry": "供应商到期",
+      "expiryHint": "代理 IP 在供应商侧的到期日；到期前 3 天每天 TG 提醒。留空不提醒。",
+      "health": "健康",
+      "notChecked": "未检测",
+      "checkFailed": "检测失败",
+      "checkNow": "立即检测",
+      "checkedAt": "检测时间",
+      "whitelist": "白名单",
+      "whitelist_off": "关闭",
+      "whitelist_global": "全局",
+      "whitelist_custom": "自定义",
+      "sniffingOff": "嗅探未开启",
+      "sniffingOffHint": "该入站关闭了嗅探，域名白名单无法匹配。请在入站设置里开启 Sniffing。",
+      "settings": "全局设置",
+      "globalDomains": "全局白名单",
+      "globalDomainsHint": "每行一条。开启了「域名限制」但未填自定义白名单的节点使用此列表。",
+      "checkUrl": "检测地址",
+      "checkUrlHint": "健康检查通过代理请求此地址；支持 ip-api.com 的 JSON 或纯文本 IP（如 https://api.ipify.org）。留空恢复默认。"
     }
   },
   "tgbot": {

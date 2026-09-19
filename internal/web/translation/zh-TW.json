@@ -125,7 +125,8 @@
     "openMenu": "開啟選單",
     "pinSidebar": "固定側邊欄",
     "unpinSidebar": "取消固定側邊欄",
-    "subFormats": "Sub Formats"
+    "subFormats": "Sub Formats",
+    "portForward": "Port Forward"
   },
   "pages": {
     "login": {
@@ -946,7 +947,11 @@
       "renewOnDayDesc": "每個自然月的這一天午夜（依面板時區）續期，而不是每 N 天續期一次。若當月沒有該日期，則在當月最後一天續期。填 0 保持按天間隔模式。",
       "renewsUsed": "已用續期次數",
       "tuicTotalGBDesc": "TUIC does not support per-client traffic limits; set traffic limit on the inbound instead.",
-      "bulkAdTagHint": "輸入 32 位十六進位標籤以設定，或輸入 'none' 清除 MTProto 贊助頻道。"
+      "bulkAdTagHint": "輸入 32 位十六進位標籤以設定，或輸入 'none' 清除 MTProto 贊助頻道。",
+      "renewExtend": "Renew",
+      "renewMonths": "+{{n}} month(s)",
+      "renewDisabled": "Only for clients with an expiry date",
+      "renewSuccess": "Renewed by {{n}} month(s)"
     },
     "groups": {
       "name": "名稱",
@@ -2256,6 +2261,50 @@
         "badTag": "無效的標籤",
         "badVlessRoute": "請輸入 0 到 65535 之間的單一數字"
       }
+    },
+    "portForward": {
+      "title": "Port Forward",
+      "addRule": "Add Rule",
+      "inbound": "Inbound",
+      "destType": "Target Type",
+      "destAddress": "Address",
+      "destPort": "Port",
+      "username": "Username",
+      "password": "Password",
+      "remark": "Remark",
+      "enable": "Enable",
+      "orphanInbound": "Inbound missing",
+      "duplicateInbound": "This inbound already has a forward rule. Edit the existing one instead.",
+      "toasts": {
+        "obtain": "Failed to load forward rules",
+        "createSuccess": "Forward rule created",
+        "updateSuccess": "Forward rule updated",
+        "deleteSuccess": "Forward rule deleted",
+        "checkDone": "Check finished",
+        "settingsSaved": "Global settings saved"
+      },
+      "remarkHint": "Panel-only; customers never see it. Customer name / contact / proxy provider, etc.",
+      "domainLimit": "Domain Whitelist",
+      "domains": "Custom Whitelist",
+      "domainsHint": "One per line, Xray domain matcher syntax (domain:tiktok.com / geosite:tiktok / substring). Leave empty to use the global list. Unmatched traffic (including bare IPs) is blocked.",
+      "expiry": "Provider Expiry",
+      "expiryHint": "Expiry of the proxy IP at the provider; a daily Telegram reminder starts 3 days before. Empty = no reminder.",
+      "health": "Health",
+      "notChecked": "Not checked",
+      "checkFailed": "Check failed",
+      "checkNow": "Check now",
+      "checkedAt": "Checked at",
+      "whitelist": "Whitelist",
+      "whitelist_off": "Off",
+      "whitelist_global": "Global",
+      "whitelist_custom": "Custom",
+      "sniffingOff": "Sniffing off",
+      "sniffingOffHint": "This inbound has sniffing disabled, so the domain whitelist cannot match. Enable Sniffing in the inbound settings.",
+      "settings": "Global Settings",
+      "globalDomains": "Global Whitelist",
+      "globalDomainsHint": "One per line. Used by rules that enable the whitelist without a custom list.",
+      "checkUrl": "Check URL",
+      "checkUrlHint": "Health checks fetch this URL through each proxy; ip-api.com JSON or a plain-text IP (e.g. https://api.ipify.org). Empty restores the default."
     }
   },
   "tgbot": {
