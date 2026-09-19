@@ -949,9 +949,9 @@
       "tuicTotalGBDesc": "TUIC does not support per-client traffic limits; set traffic limit on the inbound instead.",
       "bulkAdTagHint": "輸入 32 位十六進位標籤以設定，或輸入 'none' 清除 MTProto 贊助頻道。",
       "renewExtend": "Renew",
-      "renewMonths": "+{{n}} month(s)",
+      "renewMonths": "+{n} month(s)",
       "renewDisabled": "Only for clients with an expiry date",
-      "renewSuccess": "Renewed by {{n}} month(s)"
+      "renewSuccess": "Renewed by {n} month(s)"
     },
     "groups": {
       "name": "名稱",

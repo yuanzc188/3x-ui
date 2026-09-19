@@ -949,9 +949,9 @@
       "tuicTotalGBDesc": "TUIC не поддерживает персональные квоты трафика; задайте лимит на уровне инбаунда.",
       "bulkAdTagHint": "Введите 32-значный hex-тег для установки или 'none' для очистки спонсорского канала на MTProto.",
       "renewExtend": "Renew",
-      "renewMonths": "+{{n}} month(s)",
+      "renewMonths": "+{n} month(s)",
       "renewDisabled": "Only for clients with an expiry date",
-      "renewSuccess": "Renewed by {{n}} month(s)"
+      "renewSuccess": "Renewed by {n} month(s)"
     },
     "groups": {
       "name": "Имя",

@@ -949,9 +949,9 @@
       "tuicTotalGBDesc": "TUIC does not support per-client traffic limits; set traffic limit on the inbound instead.",
       "bulkAdTagHint": "Nhập thẻ hex 32 ký tự để đặt hoặc 'none' để xóa kênh tài trợ trên MTProto.",
       "renewExtend": "Renew",
-      "renewMonths": "+{{n}} month(s)",
+      "renewMonths": "+{n} month(s)",
       "renewDisabled": "Only for clients with an expiry date",
-      "renewSuccess": "Renewed by {{n}} month(s)"
+      "renewSuccess": "Renewed by {n} month(s)"
     },
     "groups": {
       "name": "Tên",
