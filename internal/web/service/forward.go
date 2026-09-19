@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
@@ -60,6 +61,55 @@ func (s *ForwardService) GetAll() ([]model.ForwardRule, error) {
 		return nil, err
 	}
 	return rules, nil
+}
+
+// GetAllWithStatus is GetAll plus list-only enrichment: SniffingOff marks
+// rules whose bound inbound has sniffing disabled (whitelist can't match).
+func (s *ForwardService) GetAllWithStatus() ([]model.ForwardRule, error) {
+	rules, err := s.GetAll()
+	if err != nil || len(rules) == 0 {
+		return rules, err
+	}
+	sniffingOff, err := inboundsWithSniffingOff()
+	if err != nil {
+		return nil, err
+	}
+	for i := range rules {
+		_, rules[i].SniffingOff = sniffingOff[rules[i].InboundTag]
+	}
+	return rules, nil
+}
+
+// inboundsWithSniffingOff returns the tags of inbounds whose sniffing block
+// is present and explicitly disabled. Absent/unparsable sniffing counts as on
+// (xray's own default), so the warning never fires spuriously.
+func inboundsWithSniffingOff() (map[string]struct{}, error) {
+	var rows []struct {
+		Tag      string
+		Sniffing string
+	}
+	if err := database.GetDB().Model(&model.Inbound{}).Select("tag, sniffing").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	off := map[string]struct{}{}
+	for _, row := range rows {
+		var sn struct {
+			Enabled *bool `json:"enabled"`
+		}
+		if json.Unmarshal([]byte(row.Sniffing), &sn) == nil && sn.Enabled != nil && !*sn.Enabled {
+			off[row.Tag] = struct{}{}
+		}
+	}
+	return off, nil
+}
+
+// GetByID loads one rule.
+func (s *ForwardService) GetByID(id int) (*model.ForwardRule, error) {
+	var rule model.ForwardRule
+	if err := database.GetDB().First(&rule, id).Error; err != nil {
+		return nil, err
+	}
+	return &rule, nil
 }
 
 // ActiveRules returns only enabled rules — used by config generation.

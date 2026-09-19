@@ -100,3 +100,34 @@ func TestForwardUpdateKeepsCheckFields(t *testing.T) {
 		t.Fatalf("check fields were overwritten: %+v", got)
 	}
 }
+
+func TestGetAllWithStatus_SniffingOff(t *testing.T) {
+	newForwardTestDB(t)
+	db := database.GetDB()
+	inbounds := []model.Inbound{
+		{UserId: 1, Port: 1, Protocol: "vless", Tag: "in-off", Sniffing: `{"enabled":false,"destOverride":["http"]}`, Settings: "{}", StreamSettings: "{}"},
+		{UserId: 1, Port: 2, Protocol: "vless", Tag: "in-on", Sniffing: `{"enabled":true}`, Settings: "{}", StreamSettings: "{}"},
+		{UserId: 1, Port: 3, Protocol: "vless", Tag: "in-none", Sniffing: ``, Settings: "{}", StreamSettings: "{}"},
+	}
+	for i := range inbounds {
+		if err := db.Create(&inbounds[i]).Error; err != nil {
+			t.Fatalf("seed inbound: %v", err)
+		}
+	}
+	svc := ForwardService{}
+	for _, tag := range []string{"in-off", "in-on", "in-none", "in-orphan"} {
+		if err := svc.Add(&model.ForwardRule{InboundTag: tag, DestType: "socks", DestAddress: "1.1.1.1", DestPort: 1, Enable: true}); err != nil {
+			t.Fatalf("Add %s: %v", tag, err)
+		}
+	}
+	rules, err := svc.GetAllWithStatus()
+	if err != nil {
+		t.Fatalf("GetAllWithStatus: %v", err)
+	}
+	want := map[string]bool{"in-off": true, "in-on": false, "in-none": false, "in-orphan": false}
+	for _, r := range rules {
+		if r.SniffingOff != want[r.InboundTag] {
+			t.Errorf("%s: sniffingOff=%v want %v", r.InboundTag, r.SniffingOff, want[r.InboundTag])
+		}
+	}
+}

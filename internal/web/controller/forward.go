@@ -29,15 +29,75 @@ func (a *ForwardController) initRouter(g *gin.RouterGroup) {
 	g.POST("/update/:id", a.update)
 	g.POST("/del/:id", a.del)
 	g.POST("/setEnable/:id", a.setEnable)
+	g.POST("/check/:id", a.check)
+	g.GET("/settings", a.getSettings)
+	g.POST("/settings", a.saveSettings)
 }
 
 func (a *ForwardController) list(c *gin.Context) {
-	rules, err := a.forwardService.GetAll()
+	rules, err := a.forwardService.GetAllWithStatus()
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.portForward.toasts.obtain"), err)
 		return
 	}
 	jsonObj(c, rules, nil)
+}
+
+// check probes one rule right now and returns it with fresh Check* fields.
+func (a *ForwardController) check(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	rule, err := a.forwardService.GetByID(id)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	fs, err := a.forwardService.GetSettings()
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	checkURL, err := service.SanitizePublicHTTPURL(fs.CheckUrl, false)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	a.forwardService.CheckOne(rule, checkURL)
+	jsonMsgObj(c, I18nWeb(c, "pages.portForward.toasts.checkDone"), rule, nil)
+}
+
+func (a *ForwardController) getSettings(c *gin.Context) {
+	fs, err := a.forwardService.GetSettings()
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	jsonObj(c, fs, nil)
+}
+
+// saveSettings persists both knobs; a changed global whitelist alters the
+// generated routing, so xray is flagged for a (hot) reload.
+func (a *ForwardController) saveSettings(c *gin.Context) {
+	fs, ok := middleware.BindAndValidate[service.ForwardSettings](c)
+	if !ok {
+		return
+	}
+	before, err := a.forwardService.GetSettings()
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	if err := a.forwardService.SaveSettings(*fs); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	jsonMsg(c, I18nWeb(c, "pages.portForward.toasts.settingsSaved"), nil)
+	if after, err := a.forwardService.GetSettings(); err == nil && after.GlobalDomains != before.GlobalDomains {
+		a.xrayService.SetToNeedRestart()
+	}
 }
 
 func (a *ForwardController) add(c *gin.Context) {
