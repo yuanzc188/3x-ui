@@ -38,10 +38,15 @@ func (s *ForwardService) Add(rule *model.ForwardRule) error {
 	return db.Create(rule).Error
 }
 
-// Update saves an existing rule (full overwrite by primary key).
+// forwardCheckColumns are owned by the health checker; form updates must
+// never overwrite them with the zero values a bound form carries.
+var forwardCheckColumns = []string{"checked_at", "check_ok", "check_ip", "check_geo", "check_ms", "check_err"}
+
+// Update overwrites every editable column of an existing rule (including
+// zero values such as enable=false), leaving health-check results untouched.
 func (s *ForwardService) Update(rule *model.ForwardRule) error {
 	db := database.GetDB()
-	return db.Save(rule).Error
+	return db.Model(rule).Select("*").Omit(forwardCheckColumns...).Updates(rule).Error
 }
 
 // Delete removes a rule by id.

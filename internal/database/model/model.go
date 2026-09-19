@@ -1296,6 +1296,24 @@ type ForwardRule struct {
 	Username    string `json:"username" form:"username"`
 	Password    string `json:"password" form:"password"`
 	Enable      bool   `json:"enable" form:"enable" gorm:"default:true"`
+
+	// Domain whitelist, three states: DomainLimit off = unrestricted;
+	// on with empty Domains = global list; on with Domains = this list only.
+	DomainLimit bool   `json:"domainLimit" form:"domainLimit"`
+	Domains     string `json:"domains" form:"domains"` // newline separated
+	// Provider-side expiry of the proxy (ms), 0 = unset.
+	ExpiryTime int64 `json:"expiryTime" form:"expiryTime"`
+	// Health-check results, written only by ForwardService.CheckOne. form:"-"
+	// keeps them out of add/update binding; Update also omits their columns.
+	CheckedAt int64  `json:"checkedAt" form:"-"`
+	CheckOK   bool   `json:"checkOk" form:"-"`
+	CheckIP   string `json:"checkIp" form:"-"`
+	CheckGeo  string `json:"checkGeo" form:"-"`
+	CheckMs   int    `json:"checkMs" form:"-"`
+	CheckErr  string `json:"checkErr" form:"-"`
+	// List-only enrichment: the bound inbound has sniffing disabled, so the
+	// domain whitelist can never match. Never persisted.
+	SniffingOff bool `json:"sniffingOff" gorm:"-"`
 }
 
 func MergeClientRecord(existing *ClientRecord, incoming *ClientRecord) []ClientMergeConflict {

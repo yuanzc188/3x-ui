@@ -66,3 +66,37 @@ func TestForwardRuleCRUD(t *testing.T) {
 		t.Fatalf("expected 0 rules after delete, got %d", len(all))
 	}
 }
+
+func TestForwardUpdateKeepsCheckFields(t *testing.T) {
+	newForwardTestDB(t)
+	svc := ForwardService{}
+	rule := &model.ForwardRule{InboundTag: "in-a", DestType: "socks", DestAddress: "1.2.3.4", DestPort: 1080, Enable: true}
+	if err := svc.Add(rule); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	db := database.GetDB()
+	if err := db.Model(&model.ForwardRule{}).Where("id = ?", rule.Id).
+		Updates(map[string]any{"check_ip": "9.9.9.9", "check_ok": true, "checked_at": int64(123)}).Error; err != nil {
+		t.Fatalf("seed check fields: %v", err)
+	}
+
+	// A form-bound update carries zero check fields and enable=false.
+	upd := *rule
+	upd.Remark = "changed"
+	upd.Enable = false
+	upd.CheckIP, upd.CheckOK, upd.CheckedAt = "", false, 0
+	if err := svc.Update(&upd); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	var got model.ForwardRule
+	if err := db.First(&got, rule.Id).Error; err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got.Remark != "changed" || got.Enable {
+		t.Fatalf("editable fields not applied: remark=%q enable=%v", got.Remark, got.Enable)
+	}
+	if got.CheckIP != "9.9.9.9" || !got.CheckOK || got.CheckedAt != 123 {
+		t.Fatalf("check fields were overwritten: %+v", got)
+	}
+}
