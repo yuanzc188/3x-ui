@@ -15,3 +15,23 @@ export function inboundAlreadyBound(
 ): boolean {
   return rules.some((r) => r.inboundTag === inboundTag && r.id !== editingId);
 }
+
+export type WhitelistMode = 'off' | 'global' | 'custom';
+
+// whitelistMode mirrors the server's three-state resolution (effectiveDomains).
+export function whitelistMode(r: Pick<ForwardRule, 'domainLimit' | 'domains'>): WhitelistMode {
+  if (!r.domainLimit) return 'off';
+  return (r.domains ?? '').trim() ? 'custom' : 'global';
+}
+
+export type ExpiryLevel = 'none' | 'ok' | 'soon' | 'expired';
+
+const SOON_MS = 3 * 86_400_000;
+
+// expiryLevel matches the daily reminder job: within 3 days = soon.
+export function expiryLevel(expiryTime: number, now: number): ExpiryLevel {
+  if (!expiryTime || expiryTime <= 0) return 'none';
+  if (expiryTime <= now) return 'expired';
+  if (expiryTime - now < SOON_MS) return 'soon';
+  return 'ok';
+}

@@ -54,5 +54,6 @@ export const keys = {
   portForward: {
     root: () => ['portForward'] as const,
     list: () => ['portForward', 'list'] as const,
+    settings: () => ['portForward', 'settings'] as const,
   },
 } as const;
