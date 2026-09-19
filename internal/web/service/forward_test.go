@@ -131,3 +131,32 @@ func TestGetAllWithStatus_SniffingOff(t *testing.T) {
 		}
 	}
 }
+
+func TestForwardSettingsRoundTrip(t *testing.T) {
+	newForwardTestDB(t)
+	svc := ForwardService{}
+	got, err := svc.GetSettings()
+	if err != nil || got.CheckUrl != defaultValueMap["forwardCheckUrl"] || got.GlobalDomains != "" {
+		t.Fatalf("defaults: %+v err=%v", got, err)
+	}
+	if err := svc.SaveSettings(ForwardSettings{GlobalDomains: " domain:a.com \n\ndomain:a.com\ndomain:b.com", CheckUrl: "https://api.ipify.org/?x=1#f"}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	got, _ = svc.GetSettings()
+	if got.GlobalDomains != "domain:a.com\ndomain:b.com" {
+		t.Fatalf("global domains not normalized: %q", got.GlobalDomains)
+	}
+	if got.CheckUrl != "https://api.ipify.org/?x=1#f" {
+		t.Fatalf("check url: %q", got.CheckUrl)
+	}
+	if err := svc.SaveSettings(ForwardSettings{CheckUrl: "ftp://x"}); err == nil {
+		t.Fatal("non-http scheme must be rejected")
+	}
+	if err := svc.SaveSettings(ForwardSettings{CheckUrl: "  "}); err != nil {
+		t.Fatalf("empty url must reset to default: %v", err)
+	}
+	got, _ = svc.GetSettings()
+	if got.CheckUrl != defaultValueMap["forwardCheckUrl"] {
+		t.Fatalf("empty url did not reset: %q", got.CheckUrl)
+	}
+}

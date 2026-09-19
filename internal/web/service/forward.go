@@ -36,14 +36,16 @@ func (s *ForwardService) GetSettings() (ForwardSettings, error) {
 	return ForwardSettings{GlobalDomains: domains, CheckUrl: effectiveSettingValue("forwardCheckUrl", checkURL)}, nil
 }
 
-// SaveSettings validates the check URL (public http/https only, SSRF-safe)
-// and persists both keys. An empty URL resets to the default.
+// SaveSettings persists both keys. The check URL is validated syntactically
+// here (http/https with a host); the SSRF/private-host check runs at request
+// time in CheckAll and the check endpoint, so a DNS hiccup never blocks
+// saving the whitelist. An empty URL resets to the default.
 func (s *ForwardService) SaveSettings(fs ForwardSettings) error {
 	checkURL := strings.TrimSpace(fs.CheckUrl)
 	if checkURL == "" {
 		checkURL = defaultValueMap["forwardCheckUrl"]
 	}
-	clean, err := SanitizePublicHTTPURL(checkURL, false)
+	clean, err := SanitizeHTTPURL(checkURL)
 	if err != nil {
 		return err
 	}
