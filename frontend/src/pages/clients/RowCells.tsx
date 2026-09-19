@@ -1,7 +1,8 @@
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Popover, Space, Tag, Tooltip } from 'antd';
+import { Button, Dropdown, Popover, Space, Tag, Tooltip } from 'antd';
 import {
+  CalendarOutlined,
   DeleteOutlined,
   EditOutlined,
   InfoCircleOutlined,
@@ -11,6 +12,7 @@ import {
 
 import { formatInboundLabel } from '@/lib/inbounds/label';
 import type { InboundOption } from '@/hooks/useClients';
+import { RENEW_MONTH_OPTIONS } from './renew';
 
 const ICON_BUTTON_STYLE = { fontSize: 16 } as const;
 
@@ -19,6 +21,7 @@ interface ClientRowActionsProps {
   onShowQr: (email: string) => void;
   onShowInfo: (email: string) => void;
   onResetTraffic: (email: string) => void;
+  onRenew: (email: string, months: number) => void;
   onEdit: (email: string) => void;
   onDelete: (email: string) => void;
 }
@@ -33,6 +36,7 @@ export const ClientRowActions = memo(function ClientRowActions({
   onShowQr,
   onShowInfo,
   onResetTraffic,
+  onRenew,
   onEdit,
   onDelete,
 }: ClientRowActionsProps) {
@@ -69,6 +73,26 @@ export const ClientRowActions = memo(function ClientRowActions({
           onClick={() => onResetTraffic(email)}
         />
       </Tooltip>
+      <Dropdown
+        trigger={['click']}
+        menu={{
+          items: RENEW_MONTH_OPTIONS.map((n) => ({
+            key: String(n),
+            label: t('pages.clients.renewMonths', { n }),
+            onClick: () => onRenew(email, n),
+          })),
+        }}
+      >
+        <Tooltip title={t('pages.clients.renewExtend')}>
+          <Button
+            size="small"
+            type="text"
+            style={ICON_BUTTON_STYLE}
+            icon={<CalendarOutlined />}
+            aria-label={t('pages.clients.renewExtend')}
+          />
+        </Tooltip>
+      </Dropdown>
       <Tooltip title={t('edit')}>
         <Button
           size="small"

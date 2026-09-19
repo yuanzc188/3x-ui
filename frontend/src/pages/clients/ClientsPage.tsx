@@ -29,6 +29,7 @@ import {
 } from 'antd';
 import type { ColumnsType, TableProps } from 'antd/es/table';
 import {
+  CalendarOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   DeleteOutlined,
@@ -61,6 +62,7 @@ import { useWebSocket } from '@/hooks/useWebSocket';
 import { useClients } from '@/hooks/useClients';
 import { useNodesQuery } from '@/api/queries/useNodesQuery';
 import { useDatepicker } from '@/hooks/useDatepicker';
+import { RENEW_MONTH_OPTIONS, renewAddDays } from './renew';
 import type {
   ClientRecord,
   InboundOption,
@@ -741,6 +743,22 @@ export default function ClientsPage() {
     [modal, t, resetTraffic, messageApi],
   );
 
+  // Renewal = "+N calendar months" applied through the server-side bulkAdjust
+  // (one email), so no client payload is rebuilt on the client side.
+  const onRenew = useCallback(
+    async (email: string, months: number) => {
+      const row = rowsByEmail.current.get(email);
+      const days = row ? renewAddDays(row.expiryTime ?? 0, months, Date.now()) : null;
+      if (days === null) {
+        messageApi.warning(t('pages.clients.renewDisabled'));
+        return;
+      }
+      const msg = await bulkAdjust([email], days, 0);
+      if (msg?.success) messageApi.success(t('pages.clients.renewSuccess', { n: months }));
+    },
+    [bulkAdjust, messageApi, t],
+  );
+
   const onShowInfo = useCallback(
     async (email: string) => {
       const row = rowsByEmail.current.get(email);
@@ -1050,13 +1068,14 @@ export default function ClientsPage() {
       {
         title: t('pages.clients.actions'),
         key: 'actions',
-        width: 200,
+        width: 230,
         render: (_v, record) => (
           <ClientRowActions
             email={record.email}
             onShowQr={onShowQr}
             onShowInfo={onShowInfo}
             onResetTraffic={onResetTraffic}
+            onRenew={onRenew}
             onEdit={onEdit}
             onDelete={onDelete}
           />
@@ -1809,6 +1828,20 @@ export default function ClientsPage() {
                                                 </>
                                               ),
                                               onClick: () => onResetTraffic(row.email),
+                                            },
+                                            {
+                                              key: 'renew',
+                                              label: (
+                                                <>
+                                                  <CalendarOutlined />{' '}
+                                                  {t('pages.clients.renewExtend')}
+                                                </>
+                                              ),
+                                              children: RENEW_MONTH_OPTIONS.map((n) => ({
+                                                key: `renew-${n}`,
+                                                label: t('pages.clients.renewMonths', { n }),
+                                                onClick: () => onRenew(row.email, n),
+                                              })),
                                             },
                                             {
                                               key: 'edit',
