@@ -451,10 +451,17 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 	// Inject port-forwarding rules: each enabled rule becomes a socks/http
 	// outbound + a routing rule. Source of truth is the forward_rules table;
 	// the stored template is never modified.
-	if forwardRules, err := (&ForwardService{}).ActiveRules(); err != nil {
+	forwardSvc := &ForwardService{}
+	if forwardRules, err := forwardSvc.ActiveRules(); err != nil {
 		logger.Warning("read forward rules failed:", err)
 	} else if len(forwardRules) > 0 {
-		injectForwardRules(xrayConfig, forwardRules)
+		var globalDomains []string
+		if fs, err := forwardSvc.GetSettings(); err != nil {
+			logger.Warning("read forward settings failed, global whitelist treated as empty:", err)
+		} else {
+			globalDomains = splitDomains(fs.GlobalDomains)
+		}
+		injectForwardRules(xrayConfig, forwardRules, globalDomains)
 	}
 
 	return xrayConfig, nil
@@ -984,23 +991,23 @@ func mergeSubscriptionOutbounds(cfg *xray.Config, prepend, appendList []any) {
 	cfg.OutboundConfigs = json_util.RawMessage(combined)
 }
 
+// forwardBlockTag is the blackhole outbound shared by every forward rule: it
+// absorbs UDP (residential proxies rarely support it, so apps fall back to
+// TCP) and, when a whitelist is active, everything the whitelist did not match.
+const forwardBlockTag = "forward-block"
+
 // injectForwardRules appends, for each enabled forward rule whose inbound exists
-// in the generated config, a socks/http outbound (tag forward-out-{id}) plus a
-// routing rule sending that inbound's traffic to it. Like injectPanelEgress it
-// works only on the generated config — the stored template is never modified —
-// and the additions are hot-appliable, so toggling a rule never restarts core.
+// in the generated config, a socks/http outbound (tag forward-out-{id}) plus the
+// routing rules sending that inbound's traffic to it (see forwardRoutes). Like
+// injectPanelEgress it works only on the generated config — the stored template
+// is never modified — and the additions are hot-appliable, so toggling a rule
+// never restarts core.
 //
 // Safety: if the template's outbounds or routing section is unparsable, the
 // function returns without touching the config, mirroring mergeSubscriptionOutbounds.
-func injectForwardRules(cfg *xray.Config, rules []model.ForwardRule) {
+func injectForwardRules(cfg *xray.Config, rules []model.ForwardRule, globalDomains []string) {
 	if len(rules) == 0 {
 		return
-	}
-
-	// Existing inbound tags — orphan rules (inbound deleted) are skipped.
-	inboundTags := make(map[string]struct{}, len(cfg.InboundConfigs))
-	for i := range cfg.InboundConfigs {
-		inboundTags[cfg.InboundConfigs[i].Tag] = struct{}{}
 	}
 
 	var outbounds []any
@@ -1020,40 +1027,20 @@ func injectForwardRules(cfg *xray.Config, rules []model.ForwardRule) {
 	}
 	rulesArr, _ := routing["rules"].([]any)
 
-	added := 0
-	for _, r := range rules {
-		// This helper independently honors Enable so it stays correct for any
-		// caller, even though ActiveRules() already pre-filters at the DB layer.
-		if !r.Enable {
-			continue
-		}
-		if _, ok := inboundTags[r.InboundTag]; !ok {
-			continue
-		}
-		protocol := "socks"
-		if r.DestType == "http" {
-			protocol = "http"
-		}
-		server := map[string]any{"address": r.DestAddress, "port": r.DestPort}
-		if r.Username != "" || r.Password != "" {
-			server["users"] = []any{map[string]any{"user": r.Username, "pass": r.Password}}
-		}
-		outTag := fmt.Sprintf("forward-out-%d", r.Id)
-		outbounds = append(outbounds, map[string]any{
-			"protocol": protocol,
-			"tag":      outTag,
-			"settings": map[string]any{"servers": []any{server}},
-		})
-		rulesArr = append(rulesArr, map[string]any{
-			"type":        "field",
-			"inboundTag":  []any{r.InboundTag},
-			"outboundTag": outTag,
-		})
-		added++
+	// Existing inbound tags — orphan rules (inbound deleted) are skipped.
+	inboundTags := make(map[string]struct{}, len(cfg.InboundConfigs))
+	for i := range cfg.InboundConfigs {
+		inboundTags[cfg.InboundConfigs[i].Tag] = struct{}{}
 	}
-	if added == 0 {
+	newOutbounds, newRoutes := buildForwardEntries(rules, inboundTags, globalDomains)
+	if len(newOutbounds) == 0 {
 		return
 	}
+	if !hasOutboundTag(outbounds, forwardBlockTag) {
+		newOutbounds = append(newOutbounds, map[string]any{"protocol": "blackhole", "tag": forwardBlockTag})
+	}
+	outbounds = append(outbounds, newOutbounds...)
+	rulesArr = append(rulesArr, newRoutes...)
 
 	newOut, err := json.MarshalIndent(outbounds, "", "  ")
 	if err != nil {
@@ -1070,6 +1057,77 @@ func injectForwardRules(cfg *xray.Config, rules []model.ForwardRule) {
 	// never leave an injected outbound without its matching route.
 	cfg.OutboundConfigs = json_util.RawMessage(newOut)
 	cfg.RouterConfig = json_util.RawMessage(newRouting)
+}
+
+// buildForwardEntries turns the applicable rules into outbounds and routing
+// rules, in rule order. Disabled and orphan rules are skipped.
+func buildForwardEntries(rules []model.ForwardRule, inboundTags map[string]struct{}, globalDomains []string) (outbounds, routes []any) {
+	for _, r := range rules {
+		// Honors Enable independently of ActiveRules() so it stays correct for any caller.
+		if !r.Enable {
+			continue
+		}
+		if _, ok := inboundTags[r.InboundTag]; !ok {
+			continue
+		}
+		outbounds = append(outbounds, forwardOutbound(r))
+		routes = append(routes, forwardRoutes(r, globalDomains)...)
+	}
+	return outbounds, routes
+}
+
+func forwardOutbound(r model.ForwardRule) map[string]any {
+	protocol := "socks"
+	if r.DestType == "http" {
+		protocol = "http"
+	}
+	server := map[string]any{"address": r.DestAddress, "port": r.DestPort}
+	if r.Username != "" || r.Password != "" {
+		server["users"] = []any{map[string]any{"user": r.Username, "pass": r.Password}}
+	}
+	return map[string]any{
+		"protocol": protocol,
+		"tag":      forwardOutTag(r.Id),
+		"settings": map[string]any{"servers": []any{server}},
+	}
+}
+
+func forwardOutTag(id int) string { return fmt.Sprintf("forward-out-%d", id) }
+
+func hasOutboundTag(outbounds []any, tag string) bool {
+	for _, ob := range outbounds {
+		if m, ok := ob.(map[string]any); ok {
+			if t, _ := m["tag"].(string); t == tag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// forwardRoutes builds the ordered routing rules for one inbound. Xray matches
+// top-down, so: UDP → block first; then either "whitelisted domains → proxy,
+// everything else → block" or plainly "everything → proxy". The trailing block
+// also catches connections that arrive as bare IPs (no sniffed domain) — a
+// whitelist that let those through would be no whitelist at all.
+func forwardRoutes(r model.ForwardRule, globalDomains []string) []any {
+	out := forwardOutTag(r.Id)
+	routes := []any{forwardRoute(r.InboundTag, forwardBlockTag, map[string]any{"network": "udp"})}
+	if wl := effectiveDomains(r, globalDomains); len(wl) > 0 {
+		routes = append(routes,
+			forwardRoute(r.InboundTag, out, map[string]any{"domain": wl}),
+			forwardRoute(r.InboundTag, forwardBlockTag, nil))
+		return routes
+	}
+	return append(routes, forwardRoute(r.InboundTag, out, nil))
+}
+
+func forwardRoute(inboundTag, outboundTag string, extra map[string]any) map[string]any {
+	rule := map[string]any{"type": "field", "inboundTag": []any{inboundTag}, "outboundTag": outboundTag}
+	for k, v := range extra {
+		rule[k] = v
+	}
+	return rule
 }
 
 // ensureAPIServices guarantees the gRPC services the panel depends on are
