@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/tls"
 	"embed"
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -15,10 +17,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mhsanaei/3x-ui/v3/internal/amneziawgnet"
 	"github.com/mhsanaei/3x-ui/v3/internal/config"
+	"github.com/mhsanaei/3x-ui/v3/internal/eventbus"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/mtproto"
+	"github.com/mhsanaei/3x-ui/v3/internal/tuic"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
+	"github.com/mhsanaei/3x-ui/v3/internal/util/sys"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/controller"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/job"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/locale"
@@ -26,9 +32,12 @@ import (
 	"github.com/mhsanaei/3x-ui/v3/internal/web/network"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/runtime"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
+	"github.com/mhsanaei/3x-ui/v3/internal/web/service/discord"
+	"github.com/mhsanaei/3x-ui/v3/internal/web/service/email"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service/panel"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service/tgbot"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/websocket"
+	"github.com/mhsanaei/3x-ui/v3/internal/xray"
 
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-contrib/sessions"
@@ -48,6 +57,12 @@ var i18nFS embed.FS
 var distFS embed.FS
 
 var startTime = time.Now()
+
+// cronPanicLogger adapts the package logger to cron's Printf-style logger so a
+// panicking scheduled job is recovered and logged instead of crashing the panel.
+type cronPanicLogger struct{}
+
+func (cronPanicLogger) Printf(format string, args ...any) { logger.Errorf(format, args...) }
 
 // wrapDistFS adapts the embedded `dist/` directory so it can be mounted
 // as the panel's `/assets/` static route. Vite emits its bundled JS/CSS
@@ -109,10 +124,14 @@ type Server struct {
 	xrayService    service.XrayService
 	settingService service.SettingService
 	tgbotService   tgbot.Tgbot
+	discordService *discord.DiscordService
+	discordGateway *discord.GatewayClient
 
 	wsHub *websocket.Hub
 
-	cron *cron.Cron
+	bus                  *eventbus.Bus
+	cron                 *cron.Cron
+	discordNotifyEntryID cron.EntryID
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -152,6 +171,15 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	directHTTPS := s.isDirectHTTPSConfigured()
 	sendHSTS := directHTTPS && !config.IsSkipHSTS()
 	engine.Use(middleware.SecurityHeadersMiddleware(sendHSTS))
+
+	// Cap request bodies on state-changing requests so a stolen session/API
+	// token or a buggy client can't force large allocations or long DB
+	// transactions via bulk create/attach/import endpoints. GET/HEAD/OPTIONS
+	// carry no body and are left untouched. Database restore legitimately accepts
+	// large backups and streams them to disk, so only its exact route suffix is
+	// exempt. Follow-up: make the limit a setting.
+	const maxRequestBodyBytes = 10 << 20 // 10 MiB
+	engine.Use(middleware.MaxBodyBytes(maxRequestBodyBytes, "/panel/api/server/importDB"))
 
 	webDomain, err := s.settingService.GetWebDomain()
 	if err != nil {
@@ -223,10 +251,13 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	controller.SetDistFS(distFS)
 
 	g := engine.Group(basePath)
+	g.GET("/manifest.webmanifest", controller.ServePWAManifest)
+	g.GET("/pwa-register.js", controller.ServePWARegister)
+	g.GET("/service-worker.js", controller.ServePWAServiceWorker)
+	g.GET("/icons/:name", controller.ServePWAIcon)
 
 	s.index = controller.NewIndexController(g)
 	s.panel = controller.NewXUIController(g)
-	g.GET("/panel/api/openapi.json", controller.ServeOpenAPISpec)
 	s.api = controller.NewAPIController(g)
 
 	// Initialize WebSocket hub
@@ -244,17 +275,48 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		c.JSON(http.StatusOK, gin.H{})
 	})
 
-	// Add a catch-all route to handle undefined paths and return 404
+	// Let unknown panel document routes fall back to the SPA shell, while every
+	// non-SPA miss still returns a hard 404.
 	engine.NoRoute(func(c *gin.Context) {
+		if s.panel.HandleNoRoutePanelSPA(c) {
+			return
+		}
 		c.AbortWithStatus(http.StatusNotFound)
 	})
 
 	return engine, nil
 }
 
+// Background-job cadences. Centralized here as the single tuning surface; the
+// values are unchanged from the historical hardcoded cron specs. Follow-up:
+// make these configurable via settings, add per-tick jitter to de-synchronize
+// fleet load, skip expensive jobs when no WebSocket clients are connected or
+// node/xray state is unchanged, and export per-job duration/skipped/error
+// counters.
+const (
+	cadenceXrayRunning   = "@every 1s"
+	cadenceXrayRestart   = "@every 30s"
+	cadenceXrayTraffic   = "@every 5s"
+	cadenceMtproto       = "@every 10s"
+	cadenceAmneziaWG     = "@every 10s"
+	cadenceTuic          = "@every 10s"
+	cadenceClientIPScan  = "@every 10s"
+	cadenceNodeHeartbeat = "@every 5s"
+	cadenceNodeTraffic   = "@every 5s"
+	cadenceOutboundSub   = "@every 5m"
+	cadenceReapOrphans   = "@every 5m"
+	cadenceRemoteRouting = "@every 5m"
+	cadenceXrayLogPrune  = "@every 10m"
+	cadenceCheckHash     = "@every 2m"
+	// cpu.Percent samples over a full minute (blocking), so a finer cadence just
+	// stacks overlapping samplers; subscribers rate-limit alerts to 1/min anyway.
+	cadenceCPUAlarm    = "@every 1m"
+	cadenceMemoryAlarm = "@every 1m"
+)
+
 // startTask schedules background jobs (Xray checks, traffic jobs, cron
 // jobs) which the panel relies on for periodic maintenance and monitoring.
-func (s *Server) startTask(restartXray bool) {
+func (s *Server) startTask(restartXray bool, loc *time.Location) {
 	if restartXray {
 		err := s.xrayService.RestartXray(true)
 		if err != nil {
@@ -262,51 +324,64 @@ func (s *Server) startTask(restartXray bool) {
 		}
 	}
 	// Check whether xray is running every second
-	s.cron.AddJob("@every 1s", job.NewCheckXrayRunningJob())
+	_, _ = s.cron.AddJob(cadenceXrayRunning, job.NewCheckXrayRunningJob())
 
 	// Check if xray needs to be restarted every 30 seconds
-	s.cron.AddFunc("@every 30s", func() {
-		if s.xrayService.IsNeedRestartAndSetFalse() {
-			err := s.xrayService.RestartXray(false)
-			if err != nil {
-				logger.Error("restart xray failed:", err)
-			}
-		}
+	_, _ = s.cron.AddFunc(cadenceXrayRestart, func() {
+		s.xrayService.ApplyPendingRestart()
 	})
 
 	go func() {
 		time.Sleep(time.Second * 5)
-		s.cron.AddJob("@every 5s", job.NewXrayTrafficJob())
+		_, _ = s.cron.AddJob(cadenceXrayTraffic, job.NewXrayTrafficJob())
 	}()
 
 	// Reconcile mtproto (mtg) sidecars and scrape their traffic
 	mtJob := job.NewMtprotoJob()
-	s.cron.AddJob("@every 10s", mtJob)
+	_, _ = s.cron.AddJob(cadenceMtproto, mtJob)
 	go mtJob.Run()
 
+	// Reconcile embedded AmneziaWG interfaces; traffic rides Xray's own stats
+	awgJob := job.NewAmneziaWGJob()
+	_, _ = s.cron.AddJob(cadenceAmneziaWG, awgJob)
+	go awgJob.Run()
+
+	tuicJob := job.NewTuicJob()
+	_, _ = s.cron.AddJob(cadenceTuic, tuicJob)
+	go tuicJob.Run()
+
 	// check client ips from log file every 10 sec
-	s.cron.AddJob("@every 10s", job.NewCheckClientIpJob())
+	_, _ = s.cron.AddJob(cadenceClientIPScan, job.NewCheckClientIpJob())
 
-	s.cron.AddJob("@every 5s", job.NewNodeHeartbeatJob())
+	_, _ = s.cron.AddJob(cadenceNodeHeartbeat, job.NewNodeHeartbeatJob())
 
-	s.cron.AddJob("@every 5s", job.NewNodeTrafficSyncJob())
+	_, _ = s.cron.AddJob(cadenceNodeTraffic, job.NewNodeTrafficSyncJob())
 
 	// Outbound subscription auto-refresh (respects per-sub updateInterval)
-	s.cron.AddJob("@every 5m", job.NewOutboundSubscriptionJob())
+	_, _ = s.cron.AddJob(cadenceOutboundSub, job.NewOutboundSubscriptionJob())
+
+	_, _ = s.cron.AddJob(cadenceReapOrphans, job.NewReapSyncOrphansJob())
+
+	// Warm permanent routing URLs immediately and refresh them outside the
+	// latency-sensitive subscription request path.
+	remoteRoutingJob := job.NewRemoteRoutingJob()
+	_, _ = s.cron.AddJob(cadenceRemoteRouting, remoteRoutingJob)
+	common.GoRecover("remote-routing-warm", remoteRoutingJob.Run)
 
 	// check client ips from log file every day
-	s.cron.AddJob("@daily", job.NewClearLogsJob())
-	s.cron.AddJob("@hourly", job.NewWarpIpJob())
+	_, _ = s.cron.AddJob("@daily", job.NewClearLogsJob())
+	_, _ = s.cron.AddJob(cadenceXrayLogPrune, job.NewPruneXrayLogsJob())
+	_, _ = s.cron.AddJob("@hourly", job.NewWarpIpJob())
 
 	// Inbound traffic reset jobs
 	// Run every hour
-	s.cron.AddJob("@hourly", job.NewPeriodicTrafficResetJob("hourly"))
+	_, _ = s.cron.AddJob("@hourly", job.NewPeriodicTrafficResetJob("hourly", loc))
 	// Run once a day, midnight
-	s.cron.AddJob("@daily", job.NewPeriodicTrafficResetJob("daily"))
+	_, _ = s.cron.AddJob("@daily", job.NewPeriodicTrafficResetJob("daily", loc))
 	// Run once a week, midnight between Sat/Sun
-	s.cron.AddJob("@weekly", job.NewPeriodicTrafficResetJob("weekly"))
-	// Run once a month, midnight, first of month
-	s.cron.AddJob("@monthly", job.NewPeriodicTrafficResetJob("monthly"))
+	_, _ = s.cron.AddJob("@weekly", job.NewPeriodicTrafficResetJob("weekly", loc))
+	// Check monthly reset days at midnight
+	_, _ = s.cron.AddJob("@daily", job.NewPeriodicTrafficResetJob("monthly", loc))
 
 	// LDAP sync scheduling
 	if ldapEnabled, _ := s.settingService.GetLdapEnable(); ldapEnabled {
@@ -316,13 +391,12 @@ func (s *Server) startTask(restartXray bool) {
 		}
 		j := job.NewLdapSyncJob()
 		// job has zero-value services with method receivers that read settings on demand
-		s.cron.AddJob(runtime, j)
+		_, _ = s.cron.AddJob(runtime, j)
 	}
 
-	// Make a traffic condition every day, 8:30
-	var entry cron.EntryID
+	// Telegram-bot–dependent jobs: periodic stats report + callback-hash cleanup.
 	isTgbotenabled, err := s.settingService.GetTgbotEnabled()
-	if (err == nil) && (isTgbotenabled) {
+	if (err == nil) && isTgbotenabled {
 		runtime, err := s.settingService.GetTgbotRuntime()
 		if err != nil {
 			logger.Warningf("Add NewStatsNotifyJob: failed to load runtime: %v; using default @daily", err)
@@ -332,23 +406,125 @@ func (s *Server) startTask(restartXray bool) {
 			runtime = "@daily"
 		}
 		logger.Infof("Tg notify enabled,run at %s", runtime)
-		_, err = s.cron.AddJob(runtime, job.NewStatsNotifyJob())
-		if err != nil {
+		if _, err = s.cron.AddJob(runtime, job.NewStatsNotifyJob()); err != nil {
 			logger.Warningf("Add NewStatsNotifyJob: failed to schedule runtime %q: %v", runtime, err)
-			return
 		}
 
 		// check for Telegram bot callback query hash storage reset
-		s.cron.AddJob("@every 2m", job.NewCheckHashStorageJob())
-
-		// Check CPU load and alarm to TgBot if threshold passes
-		cpuThreshold, err := s.settingService.GetTgCpu()
-		if (err == nil) && (cpuThreshold > 0) {
-			s.cron.AddJob("@every 10s", job.NewCheckCpuJob())
-		}
-	} else {
-		s.cron.Remove(entry)
+		_, _ = s.cron.AddJob(cadenceCheckHash, job.NewCheckHashStorageJob())
 	}
+
+	// Discord-bot-dependent jobs: periodic stats report + database backup.
+	isDiscordEnabled, err := s.settingService.GetDiscordBotEnable()
+	if (err == nil) && isDiscordEnabled {
+		runtime, err := s.settingService.GetDiscordRunTime()
+		if err != nil {
+			logger.Warningf("Add NewDiscordNotifyJob: failed to load runtime: %v; using default @daily", err)
+			runtime = "@daily"
+		} else if strings.TrimSpace(runtime) == "" {
+			logger.Warning("Add NewDiscordNotifyJob runtime is empty, using default @daily")
+			runtime = "@daily"
+		}
+		logger.Infof("Discord notify enabled, run at %s", runtime)
+		if entryID, err := s.cron.AddJob(runtime, job.NewDiscordNotifyJob(s.discordService)); err != nil {
+			logger.Warningf("Add NewDiscordNotifyJob: failed to schedule runtime %q: %v", runtime, err)
+		} else {
+			s.discordNotifyEntryID = entryID
+		}
+	}
+
+	// CPU monitor publishes cpu.high events; register it whenever any notifier
+	// (Telegram or Email) wants them, independent of the Telegram bot being on.
+	if s.cpuAlarmWanted() {
+		_, _ = s.cron.AddJob(cadenceCPUAlarm, job.NewCheckCpuJob())
+	}
+	// Memory monitor publishes memory.high events; register it whenever any notifier wants them.
+	if s.memoryAlarmWanted() {
+		_, _ = s.cron.AddJob(cadenceMemoryAlarm, job.NewCheckMemJob())
+	}
+
+	if mins := sys.MemoryReleaseIntervalMinutes(); mins > 0 {
+		_, _ = s.cron.AddJob(fmt.Sprintf("@every %dm", mins), job.NewMemoryReleaseJob())
+		go func() {
+			time.Sleep(time.Minute)
+			job.NewMemoryReleaseJob().Run()
+		}()
+	}
+}
+
+// cpuAlarmWanted reports whether any notifier is configured to receive cpu.high
+// alerts, so the minute-long blocking CPU sampler only runs when it's needed.
+func (s *Server) cpuAlarmWanted() bool {
+	wants := func(events string, threshold int) bool {
+		if threshold <= 0 {
+			return false
+		}
+		for e := range strings.SplitSeq(events, ",") {
+			if strings.TrimSpace(e) == string(eventbus.EventCPUHigh) {
+				return true
+			}
+		}
+		return false
+	}
+	if on, _ := s.settingService.GetTgbotEnabled(); on {
+		events, _ := s.settingService.GetTgEnabledEvents()
+		cpu, _ := s.settingService.GetTgCpu()
+		if wants(events, cpu) {
+			return true
+		}
+	}
+	if on, _ := s.settingService.GetSmtpEnable(); on {
+		events, _ := s.settingService.GetSmtpEnabledEvents()
+		cpu, _ := s.settingService.GetSmtpCpu()
+		if wants(events, cpu) {
+			return true
+		}
+	}
+	if on, _ := s.settingService.GetDiscordBotEnable(); on {
+		events, _ := s.settingService.GetDiscordEnabledEvents()
+		cpu, _ := s.settingService.GetDiscordCpu()
+		if wants(events, cpu) {
+			return true
+		}
+	}
+	return false
+}
+
+// memoryAlarmWanted reports whether any notifier is configured to receive memory.high alerts.
+func (s *Server) memoryAlarmWanted() bool {
+	wants := func(events string, threshold int) bool {
+		if threshold <= 0 {
+			return false
+		}
+		for e := range strings.SplitSeq(events, ",") {
+			if strings.TrimSpace(e) == string(eventbus.EventMemoryHigh) {
+				return true
+			}
+		}
+		return false
+	}
+	if on, _ := s.settingService.GetTgbotEnabled(); on {
+		events, _ := s.settingService.GetTgEnabledEvents()
+		mem, _ := s.settingService.GetTgMemory()
+		if wants(events, mem) {
+			return true
+		}
+	}
+	if on, _ := s.settingService.GetSmtpEnable(); on {
+		events, _ := s.settingService.GetSmtpEnabledEvents()
+		mem, _ := s.settingService.GetSmtpMemory()
+		if wants(events, mem) {
+			return true
+		}
+	}
+	if on, _ := s.settingService.GetDiscordBotEnable(); on {
+		events, _ := s.settingService.GetDiscordEnabledEvents()
+		mem, _ := s.settingService.GetDiscordMemory()
+		if wants(events, mem) {
+			return true
+		}
+	}
+	return false
 }
 
 // Start initializes and starts the web server with configured settings, routes, and background jobs.
@@ -364,7 +540,7 @@ func (s *Server) start(restartXray bool, startTgBot bool) (err error) {
 	// This is an anonymous function, no function name
 	defer func() {
 		if err != nil {
-			s.Stop()
+			_ = s.Stop()
 		}
 	}()
 
@@ -374,7 +550,19 @@ func (s *Server) start(restartXray bool, startTgBot bool) (err error) {
 	}
 	service.StartTrafficWriter()
 
-	s.cron = cron.New(cron.WithLocation(loc), cron.WithSeconds())
+	// SkipIfStillRunning stops a slow job (e.g. the 5s traffic poll on a large
+	// install) from overlapping itself: two concurrent runs of the same job race
+	// the shared xrayAPI — leaking a grpc connection — and the StatsLastValues
+	// map, whose concurrent write is a fatal runtime throw cron.Recover can't
+	// catch. cron.Recover then logs any panic and keeps the scheduler alive.
+	s.cron = cron.New(
+		cron.WithLocation(loc),
+		cron.WithSeconds(),
+		cron.WithChain(
+			cron.SkipIfStillRunning(cron.DiscardLogger),
+			cron.Recover(cron.PrintfLogger(cronPanicLogger{})),
+		),
+	)
 	s.cron.Start()
 
 	// Wire the inbound-runtime manager once so InboundService can route
@@ -385,6 +573,16 @@ func (s *Server) start(restartXray bool, startTgBot bool) (err error) {
 		APIPort:        func() int { return s.xrayService.GetXrayAPIPort() },
 		SetNeedRestart: func() { s.xrayService.SetToNeedRestart() },
 	}))
+	runtime.GetManager().SetNodeEgressResolver(&s.settingService)
+	// Supply the master client certificate for nodes in mtls mode. Issued lazily
+	// from the node CA on first use; runtime stays free of a service import.
+	runtime.SetMasterClientCertProvider(func() (tls.Certificate, error) {
+		ck, err := s.settingService.EnsureMasterClientCert()
+		if err != nil {
+			return tls.Certificate{}, err
+		}
+		return tls.X509KeyPair(ck.CertPEM, ck.KeyPEM)
+	})
 
 	engine, err := s.initRouter()
 	if err != nil {
@@ -407,8 +605,16 @@ func (s *Server) start(restartXray bool, startTgBot bool) (err error) {
 	if err != nil {
 		return err
 	}
+	if envPort, configured, envErr := config.GetPortOverride(); configured {
+		if envErr != nil {
+			logger.Warning("Ignoring invalid XUI_PORT; using configured web port:", port, envErr)
+		} else {
+			port = envPort
+			logger.Info("Using XUI_PORT override for web panel port:", port)
+		}
+	}
 	listenAddr := net.JoinHostPort(listen, strconv.Itoa(port))
-	listener, err := net.Listen("tcp", listenAddr)
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", listenAddr)
 	if err != nil {
 		return err
 	}
@@ -417,6 +623,20 @@ func (s *Server) start(restartXray bool, startTgBot bool) (err error) {
 		if err == nil {
 			c := &tls.Config{
 				Certificates: []tls.Certificate{cert},
+			}
+			// Opt-in node mTLS: when a trust CA is configured, request and verify
+			// client certs (VerifyClientCertIfGiven keeps browsers working). With
+			// no CA the listener is unchanged.
+			pool, perr := s.settingService.NodeMtlsClientCAPool()
+			switch {
+			case errors.Is(perr, service.ErrNodeMtlsTrustBundleInvalid):
+				logger.Error("Node mTLS is configured but its trust bundle will not parse, so client certificates are not accepted:", perr)
+			case perr != nil:
+				logger.Error("Node mTLS trust bundle could not be read, so client certificates are not accepted:", perr)
+			}
+			if pool != nil {
+				applyNodeMtls(c, pool)
+				logger.Info("Node mTLS enabled: verifying client certificates for the node API")
 			}
 			listener = network.NewAutoHttpsListener(listener)
 			listener = tls.NewListener(listener, c)
@@ -438,18 +658,123 @@ func (s *Server) start(restartXray bool, startTgBot bool) (err error) {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	go func() {
-		s.httpServer.Serve(listener)
-	}()
+	go network.ServeHTTP(s.httpServer, listener, "Web server")
 
-	s.startTask(restartXray)
+	// Create event bus before startTask so jobs can use it
+	s.bus = eventbus.New(eventbus.DefaultBufferSize)
+	service.SetEventBus(s.bus)
+	job.EventBus = s.bus
+	tgbot.EventBus = s.bus
+
+	// Wire xray crash callback BEFORE startTask so it's ready
+	xray.OnCrash = func(err error) {
+		if s.bus != nil {
+			s.bus.Publish(eventbus.Event{
+				Type: eventbus.EventXrayCrash,
+				Data: err.Error(),
+			})
+		}
+	}
+
+	// Register email subscriber (always — it checks smtpEnable at runtime)
+	emailService := email.NewEmailService(s.settingService)
+	emailSub := email.NewSubscriber(s.settingService, emailService)
+	s.bus.Subscribe("email-notifier", emailSub.HandleEvent)
+
+	// Wire email service to controller for test endpoint
+	controller.SetEmailService(emailService)
+
+	// Register discord subscriber (always — it checks discordBotEnable at runtime)
+	s.discordService = discord.NewDiscordService(s.settingService)
+	discordSub := discord.NewSubscriber(s.settingService, s.discordService)
+	s.bus.Subscribe("discord-notifier", discordSub.HandleEvent)
+
+	// Wire discord service to controller for test endpoint
+	controller.SetDiscordService(s.discordService)
+
+	serverService := &service.ServerService{}
+	inboundService := &service.InboundService{}
+	s.discordGateway = discord.NewGatewayClient(s.discordService, s.settingService, serverService, inboundService, &s.xrayService)
+
+	// Wire reload discord callback for settings updates
+	controller.SetReloadDiscordFunc(func() {
+		if s.discordNotifyEntryID != 0 {
+			s.cron.Remove(s.discordNotifyEntryID)
+			s.discordNotifyEntryID = 0
+		}
+		enabled, err := s.settingService.GetDiscordBotEnable()
+		if err != nil || !enabled {
+			if s.discordGateway != nil && s.discordGateway.IsRunning() {
+				s.discordGateway.Stop()
+			}
+			return
+		}
+		runtime, err := s.settingService.GetDiscordRunTime()
+		if err != nil || strings.TrimSpace(runtime) == "" {
+			runtime = "@daily"
+		}
+		entryID, err := s.cron.AddJob(runtime, job.NewDiscordNotifyJob(s.discordService))
+		if err != nil {
+			logger.Warningf("Reload Discord notify: failed to schedule runtime %q: %v", runtime, err)
+		} else {
+			s.discordNotifyEntryID = entryID
+			logger.Infof("Discord notify rescheduled, run at %s", runtime)
+		}
+
+		if s.discordGateway != nil && !s.discordGateway.IsRunning() {
+			_ = s.discordGateway.Start(s.ctx)
+		}
+	})
+
+	// Wire Telegram test function to controller
+	controller.SetTestTgFunc(func() error {
+		if !s.tgbotService.IsRunning() {
+			return fmt.Errorf("telegram bot is not running (check token and chat ID)")
+		}
+		if err := s.tgbotService.TestConnection(); err != nil {
+			return fmt.Errorf("telegram API test failed: %w", err)
+		}
+		s.tgbotService.SendMsgToTgbotAdmins("✅ Test message from 3x-ui")
+		return nil
+	})
+
+	controller.SetReloadTgbotFunc(func() {
+		enabled, err := s.settingService.GetTgbotEnabled()
+		if err != nil || !enabled {
+			if s.tgbotService.IsRunning() {
+				s.tgbotService.Stop()
+			}
+			if s.bus != nil {
+				s.bus.Unsubscribe("tg-notifier")
+			}
+			return
+		}
+		// Start() stops any previous receiver first, so it is safe whether or not the bot is already running.
+		tgBot := s.tgbotService.NewTgbot()
+		if startErr := tgBot.Start(i18nFS); startErr != nil {
+			logger.Warning("reload Telegram bot failed:", startErr)
+			return
+		}
+		if s.bus != nil {
+			s.bus.Subscribe("tg-notifier", s.tgbotService.HandleEvent)
+		}
+	})
+
+	s.startTask(restartXray, loc)
 
 	if startTgBot {
 		isTgbotenabled, err := s.settingService.GetTgbotEnabled()
-		if (err == nil) && (isTgbotenabled) {
+		if (err == nil) && isTgbotenabled {
 			tgBot := s.tgbotService.NewTgbot()
-			tgBot.Start(i18nFS)
+			_ = tgBot.Start(i18nFS)
+			// Subscribe Telegram notifications for event bus
+			s.bus.Subscribe("tg-notifier", s.tgbotService.HandleEvent)
 		}
+	}
+
+	isDiscordEnabled, err := s.settingService.GetDiscordBotEnable()
+	if (err == nil) && isDiscordEnabled && s.discordGateway != nil {
+		_ = s.discordGateway.Start(s.ctx)
 	}
 
 	return nil
@@ -467,11 +792,17 @@ func (s *Server) StopPanelOnly() error {
 func (s *Server) stop(stopXray bool, stopTgBot bool) error {
 	s.cancel()
 	if stopXray {
-		s.xrayService.StopXray()
+		_ = s.xrayService.StopXray()
 		mtproto.GetManager().StopAll()
+		amneziawgnet.GetManager().StopAll()
+		tuic.GetManager().StopAll()
+		amneziawgnet.GetOutboundManager().StopAll()
 	}
 	if s.cron != nil {
 		s.cron.Stop()
+	}
+	if s.bus != nil {
+		s.bus.Stop()
 	}
 	if err := service.PersistSystemMetrics(); err != nil {
 		logger.Warning("persist system metrics on shutdown failed:", err)
@@ -481,6 +812,9 @@ func (s *Server) stop(stopXray bool, stopTgBot bool) error {
 	}
 	if stopTgBot && s.tgbotService.IsRunning() {
 		s.tgbotService.Stop()
+	}
+	if s.discordGateway != nil && s.discordGateway.IsRunning() {
+		s.discordGateway.Stop()
 	}
 	// Gracefully stop WebSocket hub
 	if s.wsHub != nil {

@@ -6,9 +6,24 @@ export function arrJoin(v: unknown): string | undefined {
   return String(v);
 }
 
+/**
+ * Translate a table row's positional index into that rule's index in the full,
+ * unfiltered routing.rules array. The table hides balancer-loopback rules but
+ * keeps each visible row's original index in `key`, so any handler that mutates
+ * routing.rules must map the positional index back through `key` or it operates
+ * on the wrong rule once a hidden loopback precedes it.
+ */
+export function originalRuleIndex(rows: RuleRow[], positionalIndex: number): number {
+  const row = rows[positionalIndex];
+  return row ? row.key : positionalIndex;
+}
+
 export function csv(value?: string): string[] {
   if (!value) return [];
-  return String(value).split(',').map((s) => s.trim()).filter(Boolean);
+  return String(value)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 export function chipPreviewParts(parts: string[]): string {
@@ -33,10 +48,7 @@ export function buildRemarkByTag(
 }
 
 /** Format a single inbound tag as `tag (remark)`, or just `tag` when no distinct remark. */
-export function formatInboundTag(
-  tag: string,
-  remarkByTag: Record<string, string> = {},
-): string {
+export function formatInboundTag(tag: string, remarkByTag: Record<string, string> = {}): string {
   const label = remarkByTag[tag]?.trim();
   if (!label || label === tag) return tag;
   return `${tag} (${label})`;
@@ -69,6 +81,13 @@ export function inboundTagChipPreview(
   return chipPreviewParts(formatInboundTagList(tags, remarkByTag));
 }
 
+/** The internal api rule (stats traffic) — its enabled state must stay locked on. */
+export function isApiRule(rule: { outboundTag?: string; inboundTag?: string | string[] }): boolean {
+  if (rule.outboundTag !== 'api') return false;
+  const tags = Array.isArray(rule.inboundTag) ? rule.inboundTag : csv(rule.inboundTag);
+  return tags.includes('api');
+}
+
 export function ruleCriteriaChips(rule: RuleRow) {
   const chips: { label: string; value?: string }[] = [];
   if (rule.domain) chips.push({ label: 'Domain', value: rule.domain });
@@ -76,7 +95,7 @@ export function ruleCriteriaChips(rule: RuleRow) {
   if (rule.port) chips.push({ label: 'Port', value: rule.port });
   if (rule.sourceIP) chips.push({ label: 'Src IP', value: rule.sourceIP });
   if (rule.sourcePort) chips.push({ label: 'Src Port', value: rule.sourcePort });
-  if (rule.network) chips.push({ label: 'L4', value: rule.network });
+  if (rule.network) chips.push({ label: 'L4', value: rule.network.toUpperCase() });
   if (rule.protocol) chips.push({ label: 'Protocol', value: rule.protocol });
   if (rule.user) chips.push({ label: 'User', value: rule.user });
   if (rule.vlessRoute) chips.push({ label: 'VLESS', value: rule.vlessRoute });

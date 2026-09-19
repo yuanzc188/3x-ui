@@ -44,28 +44,38 @@ before = iptables-allports.conf
 [Definition]
 actionstart = <iptables> -N f2b-<name>
               <iptables> -A f2b-<name> -j <returntype>
-              <iptables> -I <chain> -p <protocol> -j f2b-<name>
+              <iptables> -I <chain> -j f2b-<name>
 
-actionstop = <iptables> -D <chain> -p <protocol> -j f2b-<name>
+actionstop = <iptables> -D <chain> -j f2b-<name>
              <actionflush>
              <iptables> -X f2b-<name>
 
 actioncheck = <iptables> -n -L <chain> | grep -q 'f2b-<name>[ \t]'
 
-actionban = <iptables> -I f2b-<name> 1 -s <ip> -p <protocol> -m multiport ! --dports <exemptports> -j <blocktype>
+actionban = <iptables> -I f2b-<name> 1 -s <ip> -p tcp -m multiport ! --dports <exemptports> -j <blocktype>
+            <iptables> -I f2b-<name> 1 -s <ip> -p udp -m multiport ! --dports <exemptports> -j <blocktype>
             echo "\$(date +"%%Y/%%m/%%d %%H:%%M:%%S")   BAN   [Email] = <F-USER> [IP] = <ip> banned for <bantime> seconds." >> $LOG_FOLDER/3xipl-banned.log
 
-actionunban = <iptables> -D f2b-<name> -s <ip> -p <protocol> -m multiport ! --dports <exemptports> -j <blocktype>
+actionunban = <iptables> -D f2b-<name> -s <ip> -p tcp -m multiport ! --dports <exemptports> -j <blocktype>
+              <iptables> -D f2b-<name> -s <ip> -p udp -m multiport ! --dports <exemptports> -j <blocktype>
               echo "\$(date +"%%Y/%%m/%%d %%H:%%M:%%S")   UNBAN   [Email] = <F-USER> [IP] = <ip> unbanned." >> $LOG_FOLDER/3xipl-banned.log
 
 [Init]
 name = default
-protocol = tcp
 chain = INPUT
 exemptports = $EXEMPT_PORTS
 EOF
 
     fail2ban-client -x start
+fi
+
+# Certificate auto-renewal: acme.sh (installed by the panel's SSL menu) relies
+# on a root crontab entry, but the crontab is lost when the container is
+# recreated and crond was never started. Re-register the job and run crond so
+# renewals actually fire; mount /root/.acme.sh as a volume to keep acme state.
+if [ -f /root/.acme.sh/acme.sh ]; then
+    /root/.acme.sh/acme.sh --install-cronjob >/dev/null 2>&1
+    crond
 fi
 
 # Run x-ui

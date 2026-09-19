@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/entity"
@@ -43,7 +42,6 @@ func NewServerController(g *gin.RouterGroup) *ServerController {
 
 // initRouter sets up the routes for server status, Xray management, and utility endpoints.
 func (a *ServerController) initRouter(g *gin.RouterGroup) {
-
 	g.GET("/status", a.status)
 	g.GET("/cpuHistory/:bucket", a.getCpuHistoryBucket)
 	g.GET("/history/:metric/:bucket", a.getMetricHistoryBucket)
@@ -53,6 +51,7 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.GET("/xrayObservatoryHistory/:tag/:bucket", a.getXrayObservatoryHistoryBucket)
 	g.GET("/getXrayVersion", a.getXrayVersion)
 	g.GET("/getPanelUpdateInfo", a.getPanelUpdateInfo)
+	g.GET("/getUpdateStatus", a.getUpdateStatus)
 	g.GET("/getConfigJson", a.getConfigJson)
 	g.GET("/getDb", a.getDb)
 	g.GET("/getMigration", a.getMigration)
@@ -64,17 +63,24 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.GET("/getNewmlkem768", a.getNewmlkem768)
 	g.GET("/getNewVlessEnc", a.getNewVlessEnc)
 	g.GET("/clientIps", a.getClientIps)
+	g.GET("/fail2banStatus", a.getFail2banStatus)
 
 	g.POST("/stopXrayService", a.stopXrayService)
 	g.POST("/restartXrayService", a.restartXrayService)
 	g.POST("/installXray/:version", a.installXray)
 	g.POST("/updatePanel", a.updatePanel)
+	g.POST("/setUpdateChannel", a.setUpdateChannel)
 	g.POST("/updateGeofile", a.updateGeofile)
 	g.POST("/updateGeofile/:fileName", a.updateGeofile)
 	g.POST("/logs/:count", a.getLogs)
 	g.POST("/xraylogs/:count", a.getXrayLogs)
+	g.POST("/amneziawglogs/:count", a.getAmneziaWGLogs)
 	g.POST("/importDB", a.importDB)
 	g.POST("/getNewEchCert", a.getNewEchCert)
+	g.POST("/getCertHash", a.getCertHash)
+	g.POST("/getRemoteCertHash", a.getRemoteCertHash)
+	g.POST("/scanRealityTarget", a.scanRealityTarget)
+	g.POST("/scanRealityTargets", a.scanRealityTargets)
 	g.POST("/clientIps", a.setClientIps)
 }
 
@@ -84,7 +90,7 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 // the cross-service side effects (xrayMetrics sample + websocket broadcast).
 func (a *ServerController) startTask() {
 	c := global.GetWebServer().GetCron()
-	c.AddFunc("@every 2s", func() {
+	_, _ = c.AddFunc("@every 2s", func() {
 		status := a.serverService.RefreshStatus()
 		if status == nil {
 			return
@@ -92,7 +98,7 @@ func (a *ServerController) startTask() {
 		a.xrayMetricsService.Sample(time.Now())
 		websocket.BroadcastStatus(status)
 	})
-	c.AddFunc("@every 1m", func() {
+	_, _ = c.AddFunc("@every 1m", func() {
 		if err := service.PersistSystemMetrics(); err != nil {
 			logger.Warning("persist system metrics failed:", err)
 		}
@@ -100,7 +106,11 @@ func (a *ServerController) startTask() {
 }
 
 // status returns the current server status information.
-func (a *ServerController) status(c *gin.Context) { jsonObj(c, a.serverService.LastStatus(), nil) }
+func (a *ServerController) status(c *gin.Context) { jsonObj(c, a.serverService.CurrentStatus(), nil) }
+
+func (a *ServerController) getFail2banStatus(c *gin.Context) {
+	jsonObj(c, a.serverService.GetFail2banStatus(), nil)
+}
 
 func parseHistoryBucket(c *gin.Context) (int, bool) {
 	bucket, err := strconv.Atoi(c.Param("bucket"))
@@ -199,10 +209,47 @@ func (a *ServerController) installXray(c *gin.Context) {
 	jsonMsg(c, I18nWeb(c, "pages.index.xraySwitchVersionPopover"), err)
 }
 
-// updatePanel starts a panel self-update to the latest release.
+// updatePanel starts a panel self-update. With no "dev" form value it follows
+// this panel's own channel setting; an explicit "dev" (sent by the master node
+// updater) overrides it for this run. The response's runId identifies this
+// update for a later getUpdateStatus poll.
 func (a *ServerController) updatePanel(c *gin.Context) {
-	err := a.panelService.StartUpdate()
-	jsonMsg(c, I18nWeb(c, "pages.index.panelUpdateStartedPopover"), err)
+	devParam := c.PostForm("dev")
+	var runID int64
+	var err error
+	if devParam == "" {
+		runID, err = a.panelService.StartUpdate()
+	} else {
+		dev, perr := strconv.ParseBool(devParam)
+		if perr != nil {
+			jsonMsg(c, "invalid data", perr)
+			return
+		}
+		runID, err = a.panelService.StartUpdateChannel(dev)
+	}
+	var obj any
+	if err == nil {
+		obj = gin.H{"runId": strconv.FormatInt(runID, 10)}
+	}
+	jsonMsgObj(c, I18nWeb(c, "pages.index.panelUpdateStartedPopover"), obj, err)
+}
+
+// getUpdateStatus reports the outcome of the most recently launched panel
+// self-update (see updatePanel). Compare the returned runId against the one
+// updatePanel returned to tell this run's result apart from a stale one.
+func (a *ServerController) getUpdateStatus(c *gin.Context) {
+	jsonObj(c, a.panelService.GetUpdateStatus(), nil)
+}
+
+// setUpdateChannel toggles whether self-update tracks the rolling dev release.
+func (a *ServerController) setUpdateChannel(c *gin.Context) {
+	dev, err := strconv.ParseBool(c.PostForm("dev"))
+	if err != nil {
+		jsonMsg(c, "invalid data", err)
+		return
+	}
+	err = a.settingService.SetDevChannelEnable(dev)
+	jsonMsg(c, I18nWeb(c, "pages.index.updateChannelChanged"), err)
 }
 
 // updateGeofile updates the specified geo file for Xray.
@@ -274,6 +321,13 @@ func (a *ServerController) getXrayLogs(c *gin.Context) {
 	jsonObj(c, logs, nil)
 }
 
+// getAmneziaWGLogs retrieves the live AmneziaWG peer activity and the panel's
+// own AmneziaWG event lines, optionally narrowed by a free-text filter.
+func (a *ServerController) getAmneziaWGLogs(c *gin.Context) {
+	logs := a.serverService.GetAmneziaWGLogs(c.Param("count"), c.PostForm("filter"))
+	jsonObj(c, logs, nil)
+}
+
 // getConfigJson retrieves the Xray configuration as JSON.
 func (a *ServerController) getConfigJson(c *gin.Context) {
 	configJson, err := a.serverService.GetConfigJson()
@@ -292,18 +346,15 @@ func (a *ServerController) getDb(c *gin.Context) {
 		return
 	}
 
-	filename := "x-ui.db"
-	if database.IsPostgres() {
-		filename = "x-ui.dump"
-	}
+	filename := a.serverService.BackupFilename(c.Request.Host)
 	if !filenameRegex.MatchString(filename) {
-		c.AbortWithError(http.StatusBadRequest, fmt.Errorf("invalid filename"))
+		_ = c.AbortWithError(http.StatusBadRequest, fmt.Errorf("invalid filename"))
 		return
 	}
 
 	c.Header("Content-Type", "application/octet-stream")
 	c.Header("Content-Disposition", "attachment; filename="+filename)
-	c.Writer.Write(db)
+	_, _ = c.Writer.Write(db)
 }
 
 // getMigration downloads a cross-engine migration file: a .dump on SQLite or a
@@ -315,13 +366,13 @@ func (a *ServerController) getMigration(c *gin.Context) {
 		return
 	}
 	if !filenameRegex.MatchString(filename) {
-		c.AbortWithError(http.StatusBadRequest, fmt.Errorf("invalid filename"))
+		_ = c.AbortWithError(http.StatusBadRequest, fmt.Errorf("invalid filename"))
 		return
 	}
 
 	c.Header("Content-Type", "application/octet-stream")
 	c.Header("Content-Disposition", "attachment; filename="+filename)
-	c.Writer.Write(data)
+	_, _ = c.Writer.Write(data)
 }
 
 // importDB imports a database file and restarts the Xray service.
@@ -332,10 +383,17 @@ func (a *ServerController) importDB(c *gin.Context) {
 		return
 	}
 	defer file.Close()
-	if err := a.serverService.ImportDB(file); err != nil {
+	// Absent field keeps this machine's own listen addresses, certificates and
+	// node identity: the safe default for the common case of moving a config to
+	// a new host. Send keepHostSettings=false to clone a machine wholesale.
+	keepHostSettings := c.Request.FormValue("keepHostSettings") != "false"
+	if err := a.serverService.ImportDB(file, keepHostSettings); err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
 		return
 	}
+	// Startup-registered routes (subPath) must match the restored DB, and the
+	// browser's restartPanel follow-up can 401 once the imported users land (#6446).
+	_ = a.panelService.RestartPanel(3 * time.Second)
 	jsonObj(c, I18nWeb(c, "pages.index.importDatabaseSuccess"), nil)
 }
 
@@ -393,6 +451,52 @@ func (a *ServerController) getNewEchCert(c *gin.Context) {
 		return
 	}
 	jsonObj(c, cert, nil)
+}
+
+// getCertHash returns the hex SHA-256 of the given certificate (file path or
+// inline content) so the panel can fill the pinned-cert field.
+func (a *ServerController) getCertHash(c *gin.Context) {
+	hashes, err := a.serverService.GetCertHash(c.PostForm("certFile"), c.PostForm("certContent"))
+	if err != nil {
+		jsonMsg(c, "get cert hash", err)
+		return
+	}
+	jsonObj(c, hashes, nil)
+}
+
+// getRemoteCertHash runs `xray tls ping` against the given server and returns
+// its live certificate SHA-256 hash(es) for pinning.
+func (a *ServerController) getRemoteCertHash(c *gin.Context) {
+	hashes, err := a.serverService.GetRemoteCertHash(c.PostForm("server"))
+	if err != nil {
+		jsonMsg(c, "get remote cert hash", err)
+		return
+	}
+	jsonObj(c, hashes, nil)
+}
+
+// scanRealityTarget probes the candidate REALITY target with the given sni and
+// returns a feasibility verdict; allowPrivate is the panel's confirmed opt-in.
+func (a *ServerController) scanRealityTarget(c *gin.Context) {
+	xver, _ := strconv.Atoi(c.PostForm("xver"))
+	allowPrivate := c.PostForm("allowPrivate") == "true"
+	res, err := a.serverService.ScanRealityTarget(c.PostForm("target"), c.PostForm("sni"), xver, allowPrivate)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.scanRealityTargetError"), err)
+		return
+	}
+	jsonObj(c, res, nil)
+}
+
+// scanRealityTargets probes the supplied comma-separated targets, or the
+// realityScanCandidates setting when empty, ranked by feasibility then latency.
+func (a *ServerController) scanRealityTargets(c *gin.Context) {
+	res, err := a.serverService.ScanRealityTargets(c.PostForm("targets"))
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.scanRealityTargetError"), err)
+		return
+	}
+	jsonObj(c, res, nil)
 }
 
 // getNewVlessEnc generates a new VLESS encryption key.

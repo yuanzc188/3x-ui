@@ -3,12 +3,12 @@ package service
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 
@@ -70,7 +70,7 @@ func syncInboundOld(tx *gorm.DB, inboundId int, clients []model.Client) error {
 
 func makeScaleClients(n int) []model.Client {
 	out := make([]model.Client, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out[i] = model.Client{
 			ID:     uuid.NewString(),
 			Email:  fmt.Sprintf("user-%07d@scale", i),
@@ -82,13 +82,7 @@ func makeScaleClients(n int) []model.Client {
 }
 
 func TestSyncInboundPostgresScale(t *testing.T) {
-	if strings.TrimSpace(os.Getenv("XUI_DB_DSN")) == "" || os.Getenv("XUI_DB_TYPE") != "postgres" {
-		t.Skip("set XUI_DB_TYPE=postgres and XUI_DB_DSN to run the postgres scale benchmark")
-	}
-	if err := database.InitDB(""); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	setupScaleDB(t)
 
 	svc := &ClientService{}
 	sizes := []int{5000, 10000, 20000, 50000, 100000, 200000}
@@ -96,9 +90,7 @@ func TestSyncInboundPostgresScale(t *testing.T) {
 	for _, n := range sizes {
 		t.Run(fmt.Sprintf("N=%d", n), func(t *testing.T) {
 			db := database.GetDB()
-			if err := db.Exec("TRUNCATE TABLE inbounds, clients, client_inbounds RESTART IDENTITY CASCADE").Error; err != nil {
-				t.Fatalf("truncate: %v", err)
-			}
+			resetScaleTables(t, db, "inbounds", "clients", "client_inbounds")
 
 			clients := makeScaleClients(n)
 			ib := &model.Inbound{
@@ -168,13 +160,7 @@ func maxDur(d, floor time.Duration) time.Duration {
 }
 
 func TestAddDelClientPostgresScale(t *testing.T) {
-	if strings.TrimSpace(os.Getenv("XUI_DB_DSN")) == "" || os.Getenv("XUI_DB_TYPE") != "postgres" {
-		t.Skip("set XUI_DB_TYPE=postgres and XUI_DB_DSN to run the postgres scale benchmark")
-	}
-	if err := database.InitDB(""); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	setupScaleDB(t)
 
 	svc := &ClientService{}
 	inboundSvc := &InboundService{}
@@ -183,9 +169,7 @@ func TestAddDelClientPostgresScale(t *testing.T) {
 	for _, n := range sizes {
 		t.Run(fmt.Sprintf("N=%d", n), func(t *testing.T) {
 			db := database.GetDB()
-			if err := db.Exec("TRUNCATE TABLE inbounds, clients, client_inbounds, client_traffics RESTART IDENTITY CASCADE").Error; err != nil {
-				t.Fatalf("truncate: %v", err)
-			}
+			resetScaleTables(t, db, "inbounds", "clients", "client_inbounds", "client_traffics")
 
 			clients := makeScaleClients(n)
 			ib := &model.Inbound{
@@ -217,7 +201,7 @@ func TestAddDelClientPostgresScale(t *testing.T) {
 
 			delEmail := clients[n/2].Email
 			start = time.Now()
-			if _, err := svc.DelInboundClientByEmail(inboundSvc, ib.Id, delEmail, false); err != nil {
+			if _, err := svc.DelInboundClientByEmail(inboundSvc, ib.Id, delEmail, false, false); err != nil {
 				t.Fatalf("DelInboundClientByEmail: %v", err)
 			}
 			delDur := time.Since(start)
@@ -233,13 +217,7 @@ func TestAddDelClientPostgresScale(t *testing.T) {
 }
 
 func TestGroupAndListPostgresScale(t *testing.T) {
-	if strings.TrimSpace(os.Getenv("XUI_DB_DSN")) == "" || os.Getenv("XUI_DB_TYPE") != "postgres" {
-		t.Skip("set XUI_DB_TYPE=postgres and XUI_DB_DSN to run the postgres scale benchmark")
-	}
-	if err := database.InitDB(""); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	setupScaleDB(t)
 
 	svc := &ClientService{}
 	sizes := []int{5000, 100000}
@@ -247,9 +225,7 @@ func TestGroupAndListPostgresScale(t *testing.T) {
 	for _, n := range sizes {
 		t.Run(fmt.Sprintf("N=%d", n), func(t *testing.T) {
 			db := database.GetDB()
-			if err := db.Exec("TRUNCATE TABLE inbounds, clients, client_inbounds, client_traffics RESTART IDENTITY CASCADE").Error; err != nil {
-				t.Fatalf("truncate: %v", err)
-			}
+			resetScaleTables(t, db, "inbounds", "clients", "client_inbounds", "client_traffics")
 			clients := makeScaleClients(n)
 			ib := &model.Inbound{Tag: fmt.Sprintf("grp-%d", n), Enable: true, Port: 40000, Protocol: model.VLESS, Settings: clientsSettings(t, clients)}
 			if err := db.Create(ib).Error; err != nil {
@@ -260,7 +236,7 @@ func TestGroupAndListPostgresScale(t *testing.T) {
 			}
 			db.Exec("ANALYZE")
 			emails := make([]string, n)
-			for i := 0; i < n; i++ {
+			for i := range n {
 				emails[i] = clients[i].Email
 			}
 
@@ -293,13 +269,7 @@ func TestGroupAndListPostgresScale(t *testing.T) {
 }
 
 func TestDelAllClientsPostgresScale(t *testing.T) {
-	if strings.TrimSpace(os.Getenv("XUI_DB_DSN")) == "" || os.Getenv("XUI_DB_TYPE") != "postgres" {
-		t.Skip("set XUI_DB_TYPE=postgres and XUI_DB_DSN to run the postgres scale benchmark")
-	}
-	if err := database.InitDB(""); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	setupScaleDB(t)
 
 	svc := &ClientService{}
 	inboundSvc := &InboundService{}
@@ -308,9 +278,7 @@ func TestDelAllClientsPostgresScale(t *testing.T) {
 	for _, n := range sizes {
 		t.Run(fmt.Sprintf("N=%d", n), func(t *testing.T) {
 			db := database.GetDB()
-			if err := db.Exec("TRUNCATE TABLE inbounds, clients, client_inbounds, client_traffics RESTART IDENTITY CASCADE").Error; err != nil {
-				t.Fatalf("truncate: %v", err)
-			}
+			resetScaleTables(t, db, "inbounds", "clients", "client_inbounds", "client_traffics")
 			clients := makeScaleClients(n)
 			ib := &model.Inbound{Tag: fmt.Sprintf("delall-%d", n), Enable: true, Port: 40000, Protocol: model.VLESS, Settings: clientsSettings(t, clients)}
 			if err := db.Create(ib).Error; err != nil {
@@ -343,13 +311,7 @@ func TestDelAllClientsPostgresScale(t *testing.T) {
 }
 
 func TestBulkOpsPostgresScale(t *testing.T) {
-	if strings.TrimSpace(os.Getenv("XUI_DB_DSN")) == "" || os.Getenv("XUI_DB_TYPE") != "postgres" {
-		t.Skip("set XUI_DB_TYPE=postgres and XUI_DB_DSN to run the postgres scale benchmark")
-	}
-	if err := database.InitDB(""); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	setupScaleDB(t)
 
 	svc := &ClientService{}
 	inboundSvc := &InboundService{}
@@ -359,9 +321,7 @@ func TestBulkOpsPostgresScale(t *testing.T) {
 	for _, n := range sizes {
 		t.Run(fmt.Sprintf("N=%d", n), func(t *testing.T) {
 			db := database.GetDB()
-			if err := db.Exec("TRUNCATE TABLE inbounds, clients, client_inbounds, client_traffics RESTART IDENTITY CASCADE").Error; err != nil {
-				t.Fatalf("truncate: %v", err)
-			}
+			resetScaleTables(t, db, "inbounds", "clients", "client_inbounds", "client_traffics")
 
 			clients := makeScaleClients(n)
 			exp := time.Now().AddDate(1, 0, 0).UnixMilli()
@@ -382,12 +342,12 @@ func TestBulkOpsPostgresScale(t *testing.T) {
 			}
 
 			emailsM := make([]string, m)
-			for i := 0; i < m; i++ {
+			for i := range m {
 				emailsM[i] = clients[i].Email
 			}
 
 			t0 := time.Now()
-			if _, _, err := svc.BulkAdjust(inboundSvc, emailsM, 7, 1<<30); err != nil {
+			if _, _, err := svc.BulkAdjust(inboundSvc, emailsM, 7, 1<<30, "", nil, ""); err != nil {
 				t.Fatalf("BulkAdjust: %v", err)
 			}
 			adjustDur := time.Since(t0)
@@ -405,7 +365,7 @@ func TestBulkOpsPostgresScale(t *testing.T) {
 			detachDur := time.Since(t0)
 
 			payloads := make([]ClientCreatePayload, m)
-			for i := 0; i < m; i++ {
+			for i := range m {
 				payloads[i] = ClientCreatePayload{
 					Client:     model.Client{ID: uuid.NewString(), Email: fmt.Sprintf("bulknew-%07d@scale", i), SubID: fmt.Sprintf("bnsub-%07d", i), Enable: true},
 					InboundIds: []int{ib.Id},

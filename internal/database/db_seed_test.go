@@ -9,6 +9,54 @@ import (
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 )
 
+func TestInitDB_GeneratesPerPanelSubscriptionPaths(t *testing.T) {
+	pathPattern := regexp.MustCompile(`^/[0-9a-z]{16}/$`)
+	loadPaths := func(dbPath string) map[string]string {
+		t.Helper()
+		if err := InitDB(dbPath); err != nil {
+			t.Fatalf("InitDB failed: %v", err)
+		}
+		defer func() {
+			if err := CloseDB(); err != nil {
+				t.Errorf("CloseDB failed: %v", err)
+			}
+		}()
+
+		keys := []string{"subPath", "subJsonPath", "subClashPath"}
+		paths := make(map[string]string, len(keys))
+		for _, key := range keys {
+			var setting model.Setting
+			if err := db.Where("key = ?", key).First(&setting).Error; err != nil {
+				t.Fatalf("read %s: %v", key, err)
+			}
+			if !pathPattern.MatchString(setting.Value) {
+				t.Fatalf("%s = %q, want /<16 lowercase alphanumeric characters>/", key, setting.Value)
+			}
+			paths[key] = setting.Value
+		}
+		if paths["subPath"] == paths["subJsonPath"] || paths["subPath"] == paths["subClashPath"] || paths["subJsonPath"] == paths["subClashPath"] {
+			t.Fatalf("subscription paths must be distinct: %v", paths)
+		}
+		return paths
+	}
+
+	firstDB := filepath.Join(t.TempDir(), "x-ui.db")
+	first := loadPaths(firstDB)
+	reloaded := loadPaths(firstDB)
+	for key, firstPath := range first {
+		if firstPath != reloaded[key] {
+			t.Fatalf("%s changed after restart: %q, then %q", key, firstPath, reloaded[key])
+		}
+	}
+
+	second := loadPaths(filepath.Join(t.TempDir(), "x-ui.db"))
+	for key, firstPath := range first {
+		if firstPath == second[key] {
+			t.Fatalf("%s reused across panels: %q", key, firstPath)
+		}
+	}
+}
+
 func TestSeedClientsFromInboundJSON_IsIdempotentAgainstExistingClients(t *testing.T) {
 	dbDir := t.TempDir()
 	t.Setenv("XUI_DB_FOLDER", dbDir)
@@ -151,5 +199,49 @@ func TestNormalizeInboundClientSubId_FillsMissingAndPreservesExisting(t *testing
 	}
 	if historyCount != 1 {
 		t.Fatalf("expected one InboundClientSubIdFix history row, got %d", historyCount)
+	}
+}
+
+func TestNormalizeSettingPaths_RepairsLegacyValues(t *testing.T) {
+	dbDir := t.TempDir()
+	t.Setenv("XUI_DB_FOLDER", dbDir)
+	if err := InitDB(filepath.Join(dbDir, "x-ui.db")); err != nil {
+		t.Fatalf("InitDB failed: %v", err)
+	}
+	t.Cleanup(func() { _ = CloseDB() })
+
+	seed := []model.Setting{
+		{Key: "subJsonPath", Value: "YIrCXJOOOL"},
+		{Key: "subPath", Value: "/sub"},
+		{Key: "subClashPath", Value: "clash/"},
+		{Key: "webBasePath", Value: "/panel/"},
+	}
+	if err := db.Where("key IN ?", []string{"subPath", "subJsonPath", "subClashPath"}).Delete(&model.Setting{}).Error; err != nil {
+		t.Fatalf("clear generated subscription paths: %v", err)
+	}
+	for i := range seed {
+		if err := db.Create(&seed[i]).Error; err != nil {
+			t.Fatalf("seed setting %s: %v", seed[i].Key, err)
+		}
+	}
+
+	if err := normalizeSettingPaths(); err != nil {
+		t.Fatalf("normalizeSettingPaths: %v", err)
+	}
+
+	want := map[string]string{
+		"subJsonPath":  "/YIrCXJOOOL/",
+		"subPath":      "/sub/",
+		"subClashPath": "/clash/",
+		"webBasePath":  "/panel/",
+	}
+	for key, expected := range want {
+		var row model.Setting
+		if err := db.Where("key = ?", key).First(&row).Error; err != nil {
+			t.Fatalf("read %s: %v", key, err)
+		}
+		if row.Value != expected {
+			t.Errorf("%s = %q, want %q", key, row.Value, expected)
+		}
 	}
 }

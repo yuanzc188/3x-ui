@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
@@ -23,10 +24,12 @@ type CopyClientsResult struct {
 	Errors  []string `json:"errors"`
 }
 
-// enrichClientStats parses each inbound's clients once, fills in the
-// UUID/SubId fields on the preloaded ClientStats, and tops up rows owned by
-// a sibling inbound (shared-email mode — the row is keyed on email so it
-// only preloads on its owning inbound).
+// enrichClientStats resolves each inbound's clients from the clients table
+// once, fills in the UUID/SubId fields on the preloaded ClientStats, and tops
+// up rows owned by a sibling inbound (shared-email mode — the row is keyed on
+// email so it only preloads on its owning inbound). Reading identity from the
+// clients table keeps /inbounds/list in sync with the running Xray config
+// when the embedded settings JSON is stale (#6436).
 func (s *InboundService) enrichClientStats(db *gorm.DB, inbounds []*model.Inbound) {
 	if len(inbounds) == 0 {
 		return
@@ -54,13 +57,14 @@ func (s *InboundService) enrichClientStats(db *gorm.DB, inbounds []*model.Inboun
 // backfillClientStats tops up each inbound's preloaded ClientStats with rows
 // owned by a sibling inbound: client_traffics is keyed on email, so a client
 // attached to several inbounds has one row that only preloads on the inbound
-// it was created on. Returns the parsed clients per inbound for reuse.
+// it was created on. Returns the clients-table clients per inbound for reuse
+// (not the embedded settings JSON, which can lag the live UUID — #6436).
 func (s *InboundService) backfillClientStats(db *gorm.DB, inbounds []*model.Inbound) [][]model.Client {
 	clientsByInbound := make([][]model.Client, len(inbounds))
 	seenByInbound := make([]map[string]struct{}, len(inbounds))
 	missing := make(map[string]struct{})
 	for i, inbound := range inbounds {
-		clients, _ := s.GetClients(inbound)
+		clients, _ := s.clientService.ListForInbound(db, inbound.Id)
 		clientsByInbound[i] = clients
 		seen := make(map[string]struct{}, len(inbound.ClientStats))
 		for _, st := range inbound.ClientStats {
@@ -126,14 +130,13 @@ func (s *InboundService) emailUsedByOtherInbounds(email string, exceptInboundId 
 	if email == "" {
 		return false, nil
 	}
-	db := database.GetDB()
 	var count int64
-	query := fmt.Sprintf(
-		"SELECT COUNT(*) %s WHERE inbounds.id != ? AND LOWER(%s) = LOWER(?)",
-		database.JSONClientsFromInbound(),
-		database.JSONFieldText("client.value", "email"),
-	)
-	if err := db.Raw(query, exceptInboundId, email).Scan(&count).Error; err != nil {
+	err := database.GetDB().Table("client_inbounds").
+		Joins("JOIN clients ON clients.id = client_inbounds.client_id").
+		Where("client_inbounds.inbound_id != ? AND LOWER(clients.email) = ?",
+			exceptInboundId, strings.ToLower(strings.TrimSpace(email))).
+		Count(&count).Error
+	if err != nil {
 		return false, err
 	}
 	return count > 0, nil
@@ -151,20 +154,23 @@ func (s *InboundService) emailsUsedByOtherInbounds(emails []string, exceptInboun
 	if len(want) == 0 {
 		return shared, nil
 	}
-	db := database.GetDB()
-	var rows []string
-	query := fmt.Sprintf(
-		"SELECT DISTINCT LOWER(%s) %s WHERE inbounds.id != ?",
-		database.JSONFieldText("client.value", "email"),
-		database.JSONClientsFromInbound(),
-	)
-	if err := db.Raw(query, exceptInboundId).Scan(&rows).Error; err != nil {
-		return nil, err
+	lowered := make([]string, 0, len(want))
+	for e := range want {
+		lowered = append(lowered, e)
 	}
-	for _, e := range rows {
-		e = strings.ToLower(strings.TrimSpace(e))
-		if _, ok := want[e]; ok {
-			shared[e] = true
+	db := database.GetDB()
+	for _, batch := range chunkStrings(lowered, sqlInChunk) {
+		var rows []struct{ Email string }
+		err := db.Table("client_inbounds").
+			Joins("JOIN clients ON clients.id = client_inbounds.client_id").
+			Select("DISTINCT LOWER(clients.email) AS email").
+			Where("client_inbounds.inbound_id != ? AND LOWER(clients.email) IN ?", exceptInboundId, batch).
+			Scan(&rows).Error
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			shared[r.Email] = true
 		}
 	}
 	return shared, nil
@@ -211,6 +217,7 @@ func (s *InboundService) buildTargetClientFromSource(source model.Client, target
 	target.Password = ""
 	target.Auth = ""
 	target.Flow = ""
+	target.Secret = ""
 
 	targetProtocol := targetInbound.Protocol
 	switch targetProtocol {
@@ -219,6 +226,7 @@ func (s *InboundService) buildTargetClientFromSource(source model.Client, target
 	case model.VLESS:
 		target.ID = s.generateRandomCredential(targetProtocol)
 		if (flow == "xtls-rprx-vision" || flow == "xtls-rprx-vision-udp443") &&
+			!targetInbound.DisableFlow &&
 			inboundCanEnableTlsFlow(string(targetProtocol), targetInbound.StreamSettings, targetInbound.Settings) {
 			target.Flow = flow
 		}
@@ -226,6 +234,11 @@ func (s *InboundService) buildTargetClientFromSource(source model.Client, target
 		target.Password = s.generateRandomCredential(targetProtocol)
 	case model.Hysteria:
 		target.Auth = s.generateRandomCredential(targetProtocol)
+	case model.MTProto:
+		target.Secret = model.GenerateFakeTLSSecret(mtprotoDomainFromSettings(targetInbound.Settings))
+	case model.TUIC:
+		target.ID = uuid.NewString()
+		target.Password = s.generateRandomCredential(targetProtocol)
 	default:
 		target.ID = s.generateRandomCredential(targetProtocol)
 	}
@@ -409,7 +422,37 @@ func (s *InboundService) GetClientInboundByEmail(email string) (traffic *xray.Cl
 			inbound, err = s.GetInbound(ids[0])
 		}
 	}
+	if err == nil && inbound != nil && !s.inboundHasClientEmail(inbound, email) {
+		// The pointed-at inbound still exists but no longer carries the client —
+		// the client was moved to another inbound (#6059). Resolve through the
+		// client_inbounds link to the inbound that actually hosts it now.
+		ids, idErr := s.clientService.GetInboundIdsForEmail(db, email)
+		if idErr == nil {
+			for _, id := range ids {
+				if id == inbound.Id {
+					continue
+				}
+				if other, oErr := s.GetInbound(id); oErr == nil && s.inboundHasClientEmail(other, email) {
+					inbound = other
+					break
+				}
+			}
+		}
+	}
 	return traffic, inbound, err
+}
+
+func (s *InboundService) inboundHasClientEmail(inbound *model.Inbound, email string) bool {
+	clients, err := s.GetClients(inbound)
+	if err != nil {
+		return false
+	}
+	for _, client := range clients {
+		if client.Email == email {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *InboundService) GetClientByEmail(clientEmail string) (*xray.ClientTraffic, *model.Client, error) {

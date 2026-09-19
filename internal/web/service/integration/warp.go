@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,16 +23,19 @@ type WarpService struct {
 }
 
 const (
-	warpAPIBase   = "https://api.cloudflareclient.com/v0a4005"
 	warpClientVer = "a-6.30-3596"
 )
 
+// warpAPIBase is the Cloudflare WARP registration API base URL. It is a var
+// (not a const) so integration tests can point it at a mock server.
+var warpAPIBase = "https://api.cloudflareclient.com/v0a4005"
+
 func (s *WarpService) GetWarpData() (string, error) {
-	return s.SettingService.GetWarp()
+	return s.GetWarp()
 }
 
 func (s *WarpService) DelWarpData() error {
-	return s.SettingService.SetWarp("")
+	return s.SetWarp("")
 }
 
 func (s *WarpService) GetWarpConfig() (string, error) {
@@ -41,7 +45,7 @@ func (s *WarpService) GetWarpConfig() (string, error) {
 	}
 
 	url := fmt.Sprintf("%s/reg/%s", warpAPIBase, warpData["device_id"])
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
@@ -67,7 +71,7 @@ func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error
 		return "", err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, warpAPIBase+"/reg", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, warpAPIBase+"/reg", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
@@ -116,7 +120,7 @@ func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error
 	if err != nil {
 		return "", err
 	}
-	if err := s.SettingService.SetWarp(string(warpJSON)); err != nil {
+	if err := s.SetWarp(string(warpJSON)); err != nil {
 		return "", err
 	}
 
@@ -142,7 +146,7 @@ func (s *WarpService) SetWarpLicense(license string) (string, error) {
 		return "", err
 	}
 
-	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
@@ -167,7 +171,7 @@ func (s *WarpService) SetWarpLicense(license string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := s.SettingService.SetWarp(string(newWarpData)); err != nil {
+	if err := s.SetWarp(string(newWarpData)); err != nil {
 		return "", err
 	}
 	return string(newWarpData), nil
@@ -190,11 +194,28 @@ func (s *WarpService) ChangeWarpIP() (string, error) {
 	}
 
 	var parsed struct {
-		Data   map[string]string      `json:"data"`
-		Config map[string]interface{} `json:"config"`
+		Data   map[string]string `json:"data"`
+		Config map[string]any    `json:"config"`
 	}
 	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
 		return "", err
+	}
+
+	// RegWarp stores the new device's data, which for a fresh registration
+	// carries an empty license_key. Re-apply the old license key to the stored
+	// data BEFORE the remote upgrade attempt, so a failed re-apply can never
+	// delete the saved key.
+	var reapplyWarn error
+	if license, ok := warpDataMap["license_key"]; ok && len(license) >= 26 {
+		if parsed.Data == nil {
+			parsed.Data = make(map[string]string)
+		}
+		parsed.Data["license_key"] = license
+		if stored, err := json.MarshalIndent(parsed.Data, "", "  "); err != nil {
+			return "", err
+		} else if err := s.SetWarp(string(stored)); err != nil {
+			return "", err
+		}
 	}
 
 	xraySvc := service.XraySettingService{}
@@ -204,16 +225,32 @@ func (s *WarpService) ChangeWarpIP() (string, error) {
 
 	if license, ok := warpDataMap["license_key"]; ok && len(license) >= 26 {
 		if _, licErr := s.SetWarpLicense(license); licErr != nil {
-			logger.Warning("ChangeWarpIP: failed to re-apply WARP license: ", licErr)
+			// The key is already preserved in storage above; surface the
+			// remote failure instead of silently downgrading to a free account.
+			reapplyWarn = licErr
+			logger.Warning("ChangeWarpIP: failed to re-apply WARP license (key preserved in storage): ", licErr)
 		}
 	}
 
-	return result, nil
+	// Return the final stored data (with the preserved license key) instead of
+	// RegWarp's snapshot, which always carries an empty license.
+	response := map[string]any{
+		"data":   parsed.Data,
+		"config": parsed.Config,
+	}
+	if reapplyWarn != nil {
+		response["warning"] = fmt.Sprintf("failed to re-apply WARP license: %v", reapplyWarn)
+	}
+	resultJSON, err := json.MarshalIndent(response, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(resultJSON), nil
 }
 
 // loadWarpCreds reads the stored warp JSON and ensures access_token + device_id are set.
 func (s *WarpService) loadWarpCreds() (map[string]string, error) {
-	warp, err := s.SettingService.GetWarp()
+	warp, err := s.GetWarp()
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +274,7 @@ func (s *WarpService) doWarpRequest(req *http.Request) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, err
 	}

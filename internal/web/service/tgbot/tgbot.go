@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mhsanaei/3x-ui/v3/internal/eventbus"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/global"
@@ -43,6 +44,9 @@ var (
 	hostname    string
 	hashStorage *global.HashStorage
 
+	// EventBus is set from web layer to publish login/security events.
+	EventBus *eventbus.Bus
+
 	// Performance improvements
 	messageWorkerPool   chan struct{} // Semaphore for limiting concurrent message processing
 	optimizedHTTPClient *http.Client  // HTTP client with connection pooling and timeouts
@@ -59,27 +63,122 @@ var (
 		timestamp time.Time
 		mutex     sync.RWMutex
 	}
-
-	// clients data to adding new client. receiver_inbound_IDs is the set of
-	// inbounds the new client will be attached to; receiver_inbound_ID mirrors
-	// the primary pick for the legacy attach-picker entry point. Per-protocol
-	// secrets (UUID, password, flow, method) are filled per-inbound on submit
-	// by ClientService.fillProtocolDefaults, so the bot only tracks universal
-	// client fields here.
-	receiver_inbound_ID  int
-	receiver_inbound_IDs []int
-	client_Email         string
-	client_LimitIP       int
-	client_TotalGB       int64
-	client_ExpiryTime    int64
-	client_Enable        bool
-	client_TgID          string
-	client_SubID         string
-	client_Comment       string
-	client_Reset         int
 )
 
-var userStates = make(map[int64]string)
+// clientDraft is one chat's add-client wizard state. Per-protocol secrets are
+// filled per-inbound on submit, so only the universal fields live here.
+type clientDraft struct {
+	sync.Mutex
+	receiverInboundID  int
+	receiverInboundIDs []int
+	email              string
+	limitIP            int
+	totalGB            int64
+	expiryTime         int64
+	enable             bool
+	tgID               string
+	subID              string
+	comment            string
+	reset              int
+}
+
+// clientDrafts keys a draft by chat: the steps arrive on the worker pool, so a
+// single draft let two admins fill in one client between them.
+type clientDrafts struct {
+	mu     sync.Mutex
+	drafts map[int64]*clientDraft
+}
+
+var addClientDrafts = &clientDrafts{drafts: make(map[int64]*clientDraft)}
+
+func (s *clientDrafts) forChat(chatID int64) *clientDraft {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	draft, ok := s.drafts[chatID]
+	if !ok {
+		draft = &clientDraft{}
+		s.drafts[chatID] = draft
+	}
+	return draft
+}
+
+func (s *clientDrafts) reset(chatID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.drafts, chatID)
+}
+
+// isAddClientStep reports whether callback data belongs to the add-client
+// wizard, the only flow that reads or writes a draft.
+func isAddClientStep(data string) bool {
+	return strings.HasPrefix(data, "add_client")
+}
+
+func (s *clientDrafts) resetAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.drafts = make(map[int64]*clientDraft)
+}
+
+// userStateStore guards the per-chat conversation states. The Telegram command
+// and callback handlers run on a worker-pool goroutine while the message handler
+// runs on the dispatch goroutine, so a bare map would be a concurrent-map-write
+// crash. It also expires abandoned conversations so a user who starts a flow and
+// goes silent doesn't leave an entry forever.
+type userStateStore struct {
+	mu        sync.Mutex
+	states    map[int64]userStateEntry
+	lastPrune time.Time
+}
+
+type userStateEntry struct {
+	state string
+	at    time.Time
+}
+
+var userStateMgr = &userStateStore{states: make(map[int64]userStateEntry)}
+
+func (s *userStateStore) set(chatID int64, state string) {
+	s.mu.Lock()
+	s.states[chatID] = userStateEntry{state: state, at: time.Now()}
+	s.mu.Unlock()
+}
+
+func (s *userStateStore) get(chatID int64) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.states[chatID]
+	return e.state, ok
+}
+
+func (s *userStateStore) clear(chatID int64) {
+	s.mu.Lock()
+	delete(s.states, chatID)
+	s.mu.Unlock()
+}
+
+func (s *userStateStore) reset() {
+	s.mu.Lock()
+	s.states = make(map[int64]userStateEntry)
+	s.mu.Unlock()
+}
+
+// maybePrune drops conversations older than maxAge, at most once per maxAge so a
+// busy bot doesn't sweep the whole map on every message.
+func (s *userStateStore) maybePrune(maxAge time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if now.Sub(s.lastPrune) < maxAge {
+		return
+	}
+	s.lastPrune = now
+	for id, e := range s.states {
+		if now.Sub(e.at) > maxAge {
+			delete(s.states, id)
+		}
+	}
+}
 
 // LoginStatus represents the result of a login attempt.
 type LoginStatus byte
@@ -221,7 +320,7 @@ func (t *Tgbot) Start(i18nFS embed.FS) error {
 				logger.Warning("Failed to parse admin ID from Telegram bot chat ID:", err)
 				return err
 			}
-			parsedAdminIds = append(parsedAdminIds, int64(id))
+			parsedAdminIds = append(parsedAdminIds, id)
 		}
 	}
 	tgBotMutex.Lock()
@@ -283,6 +382,10 @@ func (t *Tgbot) trySetBotCommands(bot *telego.Bot) {
 			{Command: "help", Description: t.I18nBot("tgbot.commands.helpDesc")},
 			{Command: "status", Description: t.I18nBot("tgbot.commands.statusDesc")},
 			{Command: "id", Description: t.I18nBot("tgbot.commands.idDesc")},
+			{Command: "usage", Description: t.I18nBot("tgbot.commands.usageDesc")},
+			{Command: "inbound", Description: t.I18nBot("tgbot.commands.inboundDesc")},
+			{Command: "restart", Description: t.I18nBot("tgbot.commands.restartDesc")},
+			{Command: "clearall", Description: t.I18nBot("tgbot.commands.clearallDesc")},
 		},
 	})
 	if err != nil {
@@ -311,10 +414,10 @@ func (t *Tgbot) createRobustFastHTTPClient(proxyUrl string) *fasthttp.Client {
 		MaxConnWaitTimeout:            10 * time.Second,
 		DisableHeaderNamesNormalizing: false,
 		DisablePathNormalizing:        false,
-		// Retry on connection errors
-		RetryIf: func(request *fasthttp.Request) bool {
-			// Retry on connection errors for GET requests
-			return string(request.Header.Method()) == "GET" || string(request.Header.Method()) == "POST"
+		// resetTimeout stays false to keep the pre-RetryIfErr retry timing.
+		RetryIfErr: func(request *fasthttp.Request, _ int, _ error) (bool, bool) {
+			method := string(request.Header.Method())
+			return false, method == "GET" || method == "POST"
 		},
 	}
 
@@ -374,6 +477,14 @@ func (t *Tgbot) IsRunning() bool {
 	return isRunning
 }
 
+// adminSnapshot returns the admin chat list under the mutex Start and Stop
+// replace it under: a torn slice header is not a harmless race.
+func adminSnapshot() []int64 {
+	tgBotMutex.Lock()
+	defer tgBotMutex.Unlock()
+	return slices.Clone(adminIds)
+}
+
 // SetHostname sets the hostname for the bot.
 func (t *Tgbot) SetHostname() {
 	host, err := os.Hostname()
@@ -407,8 +518,11 @@ func StopBot() {
 	isRunning = false
 	tgBotMutex.Unlock()
 
+	userStateMgr.reset()
+	addClientDrafts.resetAll()
+
 	if handler != nil {
-		handler.Stop()
+		_ = handler.Stop()
 	}
 
 	if cancel != nil {

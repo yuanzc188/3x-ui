@@ -26,6 +26,7 @@ func (a *GroupController) initRouter(g *gin.RouterGroup) {
 	g.POST("/groups/create", a.create)
 	g.POST("/groups/rename", a.rename)
 	g.POST("/groups/delete", a.delete)
+	g.POST("/groups/resetTraffic", a.resetTraffic)
 	g.POST("/groups/bulkAdd", a.bulkAdd)
 	g.POST("/groups/bulkRemove", a.bulkRemove)
 }
@@ -108,6 +109,24 @@ func (a *GroupController) delete(c *gin.Context) {
 	notifyClientsChanged()
 }
 
+type groupResetTrafficBody struct {
+	Name string `json:"name"`
+}
+
+func (a *GroupController) resetTraffic(c *gin.Context) {
+	var body groupResetTrafficBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	if err := a.clientService.ResetGroupTraffic(body.Name); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	jsonObj(c, gin.H{"name": body.Name}, nil)
+	notifyClientsChanged()
+}
+
 type bulkAddToGroupRequest struct {
 	Emails []string `json:"emails"`
 	Group  string   `json:"group"`
@@ -129,7 +148,6 @@ func (a *GroupController) bulkAdd(c *gin.Context) {
 		return
 	}
 	jsonObj(c, gin.H{"affected": affected}, nil)
-	a.xrayService.SetToNeedRestart()
 	notifyClientsChanged()
 }
 

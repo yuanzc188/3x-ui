@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/op/go-logging"
+
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	xuilogger "github.com/mhsanaei/3x-ui/v3/internal/logger"
-	"github.com/op/go-logging"
 )
 
 // 3x-ui logger must be initialised once before any code path that can
@@ -60,6 +61,11 @@ func setupIntegrationDB(t *testing.T) {
 // given email and ip limit.
 func seedInboundWithClient(t *testing.T, tag, email string, limitIp int) {
 	t.Helper()
+	seedInboundOnlyWithClient(t, tag, email, limitIp)
+}
+
+func seedInboundOnlyWithClient(t *testing.T, tag, email string, limitIp int) *model.Inbound {
+	t.Helper()
 	settings := map[string]any{
 		"clients": []map[string]any{
 			{
@@ -83,6 +89,21 @@ func seedInboundWithClient(t *testing.T, tag, email string, limitIp int) {
 	if err := database.GetDB().Create(inbound).Error; err != nil {
 		t.Fatalf("seed inbound: %v", err)
 	}
+	return inbound
+}
+
+func seedLinkedInboundWithClient(t *testing.T, tag, email string, limitIp int) *model.Inbound {
+	t.Helper()
+	inbound := seedInboundOnlyWithClient(t, tag, email, limitIp)
+	client := &model.ClientRecord{Email: email, LimitIP: limitIp}
+	if err := database.GetDB().Create(client).Error; err != nil {
+		t.Fatalf("seed client record: %v", err)
+	}
+	link := &model.ClientInbound{ClientId: client.Id, InboundId: inbound.Id}
+	if err := database.GetDB().Create(link).Error; err != nil {
+		t.Fatalf("seed client inbound link: %v", err)
+	}
+	return inbound
 }
 
 // seed an InboundClientIps row with the given blob.
@@ -128,46 +149,32 @@ func ipSet(entries []IPWithTimestamp) map[string]int64 {
 	return out
 }
 
-func TestRun_DisabledFail2BanSkipsProbeAndBanLog(t *testing.T) {
+// With the access-log fallback removed, an unavailable online-stats API (xray
+// down, as in this unit test) must make Run a clean no-op: no fail2ban probe, no
+// ban log, and no inbound_client_ips rows — never a crash or partial work.
+func TestRun_NoOpWhenOnlineApiUnavailable(t *testing.T) {
 	setupIntegrationDB(t)
-	t.Setenv("XUI_ENABLE_FAIL2BAN", "false")
+	t.Setenv("XUI_ENABLE_FAIL2BAN", "true")
 	marker := fakeFail2BanClient(t)
 
-	const email = "disabled-fail2ban"
-	seedInboundWithClient(t, "inbound-disabled-fail2ban", email, 1)
+	const email = "no-api-user"
+	seedInboundWithClient(t, "inbound-no-api", email, 1)
 
-	binDir := t.TempDir()
-	accessLog := filepath.Join(t.TempDir(), "access.log")
-	t.Setenv("XUI_BIN_FOLDER", binDir)
-	configData, err := json.Marshal(map[string]any{
-		"log": map[string]any{"access": accessLog},
-	})
-	if err != nil {
-		t.Fatalf("marshal xray config: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(binDir, "config.json"), configData, 0644); err != nil {
-		t.Fatalf("write xray config: %v", err)
-	}
-	if err := os.WriteFile(accessLog, []byte("2026/05/26 12:00:00 from tcp:203.0.113.10:443 accepted tcp:example.com:443 email: disabled-fail2ban\n"), 0644); err != nil {
-		t.Fatalf("write access log: %v", err)
-	}
-
-	j := NewCheckClientIpJob()
-	j.Run()
+	NewCheckClientIpJob().Run()
 
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatalf("fail2ban-client should not have been executed, stat error: %v", err)
+		t.Fatalf("fail2ban-client should not have been probed when the online API is unavailable, stat error: %v", err)
 	}
 	if info, err := os.Stat(readIpLimitLogPath()); err == nil && info.Size() > 0 {
 		body, _ := os.ReadFile(readIpLimitLogPath())
-		t.Fatalf("3xipl.log should be empty when fail2ban is disabled, got:\n%s", body)
+		t.Fatalf("3xipl.log should be empty when Run no-ops, got:\n%s", body)
 	}
 	var count int64
 	if err := database.GetDB().Model(&model.InboundClientIps{}).Where("client_email = ?", email).Count(&count).Error; err != nil {
 		t.Fatalf("count InboundClientIps: %v", err)
 	}
 	if count != 0 {
-		t.Fatalf("disabled fail2ban should not persist IP-limit rows, got %d", count)
+		t.Fatalf("no IP-limit rows should be persisted when Run no-ops, got %d", count)
 	}
 }
 
@@ -199,10 +206,13 @@ func TestUpdateInboundClientIps_LiveIpNotBannedByStillFreshHistoricals(t *testin
 	if err != nil {
 		t.Fatalf("getInboundByEmail: %v", err)
 	}
-	shouldCleanLog := j.updateInboundClientIps(row, inbound, email, live, true, false)
+	shouldCleanLog, banned := j.updateInboundClientIps(database.GetDB(), row, inbound, email, 3, live, true, false)
 
 	if shouldCleanLog {
 		t.Fatalf("shouldCleanLog must be false, nothing should have been banned with 1 live ip under limit 3")
+	}
+	if banned {
+		t.Fatalf("banned must be false with 1 live ip under limit 3")
 	}
 	if len(j.disAllowedIps) != 0 {
 		t.Fatalf("disAllowedIps must be empty, got %v", j.disAllowedIps)
@@ -252,10 +262,13 @@ func TestUpdateInboundClientIps_ExcessLiveIpIsStillBanned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getInboundByEmail: %v", err)
 	}
-	shouldCleanLog := j.updateInboundClientIps(row, inbound, email, live, true, false)
+	shouldCleanLog, banned := j.updateInboundClientIps(database.GetDB(), row, inbound, email, 1, live, true, false)
 
 	if !shouldCleanLog {
 		t.Fatalf("shouldCleanLog must be true when the live set exceeds the limit")
+	}
+	if !banned {
+		t.Fatalf("banned must be true when the live set exceeds the limit")
 	}
 	if len(j.disAllowedIps) != 1 || j.disAllowedIps[0] != "10.1.0.1" {
 		t.Fatalf("expected 10.1.0.1 to be banned; disAllowedIps = %v", j.disAllowedIps)
@@ -280,47 +293,24 @@ func TestUpdateInboundClientIps_ExcessLiveIpIsStillBanned(t *testing.T) {
 	}
 }
 
-// writeXrayAccessLog points bin/config.json at a fresh access.log holding a
-// single default-format Xray line (`from tcp:<ip>:<port> accepted … email: <e>`)
-// for the given client, so Run() has something to scrape.
-func writeXrayAccessLog(t *testing.T, email, ip string) {
-	t.Helper()
-	binDir := t.TempDir()
-	accessLog := filepath.Join(t.TempDir(), "access.log")
-	t.Setenv("XUI_BIN_FOLDER", binDir)
-	configData, err := json.Marshal(map[string]any{
-		"log": map[string]any{"access": accessLog},
-	})
-	if err != nil {
-		t.Fatalf("marshal xray config: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(binDir, "config.json"), configData, 0644); err != nil {
-		t.Fatalf("write xray config: %v", err)
-	}
-	line := "2026/06/02 13:35:53 from tcp:" + ip + ":2387 accepted tcp:example.com:443 email: " + email + "\n"
-	if err := os.WriteFile(accessLog, []byte(line), 0644); err != nil {
-		t.Fatalf("write access log: %v", err)
-	}
-}
-
-// #4800: the per-client IP log must populate even when no client has an IP
-// limit. Before the fix, Run() only scraped the access log when an IP limit
-// was active, so a limit-free install always showed an empty IP log despite
-// valid access-log lines. No ban may be written since there's no limit.
-func TestRun_CollectsIpsWithoutLimit(t *testing.T) {
+// #4800: per-client IP tracking must populate even when no client has an IP
+// limit. processObserved records observed IPs for the panel regardless of any
+// limit; only enforcement is gated, so a limit-free install still shows IPs. No
+// ban may be written since there's no limit.
+func TestProcessObserved_CollectsIpsWithoutLimit(t *testing.T) {
 	setupIntegrationDB(t)
-	t.Setenv("XUI_ENABLE_FAIL2BAN", "true")
-	fakeFail2BanClient(t)
 
 	const email = "no-limit-user"
 	seedInboundWithClient(t, "inbound-no-limit", email, 0) // limitIp = 0
-	writeXrayAccessLog(t, email, "203.0.113.10")
 
-	NewCheckClientIpJob().Run()
+	observed := map[string]map[string]int64{
+		email: {"203.0.113.10": time.Now().Unix()},
+	}
+	NewCheckClientIpJob().processObserved(observed, true, true)
 
 	ips := readClientIps(t, email)
 	if len(ips) != 1 || ips[0].IP != "203.0.113.10" {
-		t.Fatalf("expected the access-log IP to be collected without a limit, got %v", ips)
+		t.Fatalf("expected the observed IP to be collected without a limit, got %v", ips)
 	}
 
 	if info, err := os.Stat(readIpLimitLogPath()); err == nil && info.Size() > 0 {
@@ -329,22 +319,21 @@ func TestRun_CollectsIpsWithoutLimit(t *testing.T) {
 	}
 }
 
-// #4963: a stale access-log entry for a renamed/deleted client (its email no
-// longer maps to any inbound) must not create or resurrect an
-// inbound_client_ips row, and must drop any orphan left behind — instead of
-// spamming "failed to fetch inbound settings" every run.
-func TestRun_StaleAccessLogEmailIsSkippedAndOrphanDropped(t *testing.T) {
+// #4963: an observed IP for a renamed/deleted client (its email no longer maps
+// to any inbound) must not create or resurrect an inbound_client_ips row, and
+// must drop any orphan left behind — instead of erroring every run.
+func TestProcessObserved_StaleEmailIsSkippedAndOrphanDropped(t *testing.T) {
 	setupIntegrationDB(t)
-	t.Setenv("XUI_ENABLE_FAIL2BAN", "true")
-	fakeFail2BanClient(t)
 
 	const staleEmail = "renamed-away"
 	// No inbound references staleEmail. Pre-seed an orphan tracking row to
 	// confirm the job removes it rather than leaving it to error forever.
 	seedClientIps(t, staleEmail, []IPWithTimestamp{{IP: "203.0.113.5", Timestamp: time.Now().Unix()}})
-	writeXrayAccessLog(t, staleEmail, "203.0.113.5")
 
-	NewCheckClientIpJob().Run()
+	observed := map[string]map[string]int64{
+		staleEmail: {"203.0.113.5": time.Now().Unix()},
+	}
+	NewCheckClientIpJob().processObserved(observed, true, true)
 
 	var count int64
 	if err := database.GetDB().Model(&model.InboundClientIps{}).Where("client_email = ?", staleEmail).Count(&count).Error; err != nil {
@@ -374,4 +363,108 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+// the exact clients/client_inbounds relation must win over the substring scan,
+// so a client is resolved to its own inbound even when another inbound holds a
+// superstring email.
+func TestGetInboundByEmailUsesClientInboundLink(t *testing.T) {
+	setupIntegrationDB(t)
+
+	want := seedLinkedInboundWithClient(t, "linked-inbound", "exact@example.com", 1)
+	seedInboundOnlyWithClient(t, "other-inbound", "not-exact@example.com", 1)
+
+	got, err := (&CheckClientIpJob{}).getInboundByEmail("exact@example.com")
+	if err != nil {
+		t.Fatalf("getInboundByEmail returned error: %v", err)
+	}
+	if got.Id != want.Id {
+		t.Fatalf("getInboundByEmail returned inbound %d, want %d", got.Id, want.Id)
+	}
+}
+
+// the substring fallback must still verify the exact email inside settings, so
+// "ann@example.com" does not match an inbound holding "joann@example.com".
+func TestGetInboundByEmailRejectsSubstringFallbackMatch(t *testing.T) {
+	setupIntegrationDB(t)
+
+	seedInboundOnlyWithClient(t, "substring-only", "joann@example.com", 1)
+
+	if got, err := (&CheckClientIpJob{}).getInboundByEmail("ann@example.com"); err == nil {
+		t.Fatalf("substring email matched inbound %d; want no exact match", got.Id)
+	}
+}
+
+// hasLimitIp gates every 10s scan on the normalized clients table: a bare
+// "limitIp":0 in settings JSON (which the old LIKE scan matched and parsed)
+// must not enable enforcement, while a single clients.limit_ip > 0 row must.
+func TestHasLimitIp_ProbesClientRecords(t *testing.T) {
+	setupIntegrationDB(t)
+	j := &CheckClientIpJob{}
+
+	if j.hasLimitIp() {
+		t.Fatal("hasLimitIp = true on an empty database")
+	}
+
+	seedLinkedInboundWithClient(t, "no-limit", "nolimit@example.com", 0)
+	if j.hasLimitIp() {
+		t.Fatal("hasLimitIp = true with only limit_ip=0 clients")
+	}
+
+	limited := &model.ClientRecord{Email: "limited@example.com", LimitIP: 2}
+	if err := database.GetDB().Create(limited).Error; err != nil {
+		t.Fatalf("seed limited client: %v", err)
+	}
+	if !j.hasLimitIp() {
+		t.Fatal("hasLimitIp = false with a limit_ip=2 client present")
+	}
+}
+
+// The mirror of TestUpdateInboundClientIps_ExcessLiveIpIsStillBanned: with the
+// older address on the operator's allowlist nothing may be banned, it must not
+// consume the limit, and no fail2ban line may be written for it (#5378).
+func TestUpdateInboundClientIps_AllowlistedIpIsNeitherCountedNorBanned(t *testing.T) {
+	setupIntegrationDB(t)
+
+	const email = "issue5378-office"
+	seedInboundWithClient(t, "inbound-issue5378", email, 1)
+
+	now := time.Now().Unix()
+	row := seedClientIps(t, email, []IPWithTimestamp{
+		{IP: "203.0.113.10", Timestamp: now - 60},
+	})
+
+	j := NewCheckClientIpJob()
+	j.allowlist = parseIpLimitAllowlist("203.0.113.0/24")
+
+	live := []IPWithTimestamp{
+		{IP: "203.0.113.10", Timestamp: now - 5},
+		{IP: "192.0.2.9", Timestamp: now},
+	}
+
+	inbound, err := j.getInboundByEmail(email)
+	if err != nil {
+		t.Fatalf("getInboundByEmail: %v", err)
+	}
+	_, banned := j.updateInboundClientIps(database.GetDB(), row, inbound, email, 1, live, true, false)
+
+	if banned {
+		t.Fatal("an allowlisted address pushed the client over its limit and something was banned")
+	}
+	if len(j.disAllowedIps) != 0 {
+		t.Fatalf("disAllowedIps = %v, want none", j.disAllowedIps)
+	}
+
+	persisted := ipSet(readClientIps(t, email))
+	for _, ip := range []string{"203.0.113.10", "192.0.2.9"} {
+		if _, ok := persisted[ip]; !ok {
+			t.Errorf("%s must still be persisted; got %v", ip, persisted)
+		}
+	}
+
+	if body, err := os.ReadFile(readIpLimitLogPath()); err == nil {
+		if contains(string(body), "203.0.113.10") {
+			t.Fatalf("an allowlisted address reached the fail2ban log:\n%s", body)
+		}
+	}
 }

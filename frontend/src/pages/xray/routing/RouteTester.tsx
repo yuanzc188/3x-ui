@@ -66,6 +66,7 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
       <Row gutter={[8, 8]} align="bottom">
         <Col xs={fieldSpan} sm={7}>
           <Input
+            aria-label={t('pages.xray.routeTesterDest')}
             placeholder={t('pages.xray.routeTesterDest')}
             value={dest}
             onChange={(e) => setDest(e.target.value)}
@@ -75,6 +76,7 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
         </Col>
         <Col xs={12} sm={3}>
           <InputNumber
+            aria-label={t('pages.xray.routeTesterPort')}
             style={{ width: '100%' }}
             min={0}
             max={65535}
@@ -85,6 +87,7 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
         </Col>
         <Col xs={12} sm={3}>
           <Select
+            aria-label={t('pages.inbounds.network')}
             style={{ width: '100%' }}
             value={network}
             onChange={setNetwork}
@@ -96,16 +99,20 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
         </Col>
         <Col xs={12} sm={4}>
           <Select
+            aria-label={t('pages.xray.routeTesterInbound')}
             style={{ width: '100%' }}
             placeholder={t('pages.xray.routeTesterInbound')}
             allowClear
             value={inboundTag}
             onChange={setInboundTag}
-            options={inboundTags.filter(Boolean).map((tag) => ({ label: formatInboundTag(tag, remarkByTag), value: tag }))}
+            options={inboundTags
+              .filter(Boolean)
+              .map((tag) => ({ label: formatInboundTag(tag, remarkByTag), value: tag }))}
           />
         </Col>
         <Col xs={12} sm={4}>
           <Select
+            aria-label={t('pages.xray.routeTesterProtocol')}
             style={{ width: '100%' }}
             placeholder={t('pages.xray.routeTesterProtocol')}
             allowClear
@@ -115,14 +122,21 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
           />
         </Col>
         <Col xs={fieldSpan} sm={3}>
-          <Button type="primary" icon={<AimOutlined />} loading={testing} disabled={!dest.trim()} onClick={run} block>
+          <Button
+            type="primary"
+            icon={<AimOutlined />}
+            loading={testing}
+            disabled={!dest.trim()}
+            onClick={run}
+            block
+          >
             {t('pages.xray.routeTesterTest')}
           </Button>
         </Col>
       </Row>
 
-      {result && (
-        result.matched ? (
+      {result &&
+        (result.matched ? (
           <Alert
             type="success"
             showIcon
@@ -134,7 +148,9 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
                   <>
                     <span>{t('pages.xray.routeTesterViaBalancer')}:</span>
                     {(result.groupTags || []).map((tag) => (
-                      <Tag key={tag} color="orange">{tag}</Tag>
+                      <Tag key={tag} color="orange">
+                        {tag}
+                      </Tag>
                     ))}
                   </>
                 )}
@@ -143,8 +159,7 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
           />
         ) : (
           <Alert type="warning" showIcon title={t('pages.xray.routeTesterDefaultOutbound')} />
-        )
-      )}
+        ))}
     </Space>
   );
 }

@@ -19,13 +19,13 @@ export const VlessClientSchema = z.object({
   totalGB: z.number().int().min(0).default(0),
   expiryTime: z.number().int().default(0),
   enable: z.boolean().default(true),
-  tgId: z.union([z.number(), z.string()]).transform((v) => Number(v) || 0).default(0),
+  tgId: z
+    .union([z.number(), z.string()])
+    .transform((v) => Number(v) || 0)
+    .default(0),
   subId: z.string().default(''),
   comment: z.string().default(''),
   reset: z.number().int().min(0).default(0),
-  // VLESS simple reverse-proxy: which reverse tag this client routes to,
-  // plus an optional sniffing override for that path. Distinct from the
-  // inbound-level `fallbacks` feature.
   reverse: z
     .object({
       tag: z.string(),
@@ -42,9 +42,6 @@ export const VlessInboundSettingsSchema = z.object({
   decryption: z.string().min(1).default('none'),
   encryption: z.string().min(1).default('none'),
   fallbacks: z.array(VlessFallbackSchema).default([]),
-  // TODO: narrow to flow === 'xtls-rprx-vision' once a per-flow discriminator
-  // exists. 4-positive-int padding seed for xtls-rprx-vision; backend uses
-  // safe defaults when omitted.
   testseed: z.array(z.number().int().positive()).length(4).optional(),
 });
 export type VlessInboundSettings = z.infer<typeof VlessInboundSettingsSchema>;

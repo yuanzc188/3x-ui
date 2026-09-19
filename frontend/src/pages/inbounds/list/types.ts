@@ -1,4 +1,5 @@
 import type { NodeRecord } from '@/api/queries/useNodesQuery';
+import type { HostRecord } from '@/schemas/api/host';
 
 export interface StreamHints {
   network: string;
@@ -15,6 +16,8 @@ export type ProtocolFlags = {
   isMixed?: boolean;
   isHTTP?: boolean;
   isWireguard?: boolean;
+  isAmneziawg?: boolean;
+  isTuic?: boolean;
   isTunnel?: boolean;
 };
 
@@ -22,6 +25,7 @@ export interface DBInboundRecord extends ProtocolFlags {
   id: number;
   enable: boolean;
   remark: string;
+  subSortIndex: number;
   port: number;
   protocol: string;
   up: number;
@@ -43,6 +47,11 @@ export interface ClientCountEntry {
   online: string[];
 }
 
+export interface InboundSpeedEntry {
+  up: number;
+  down: number;
+}
+
 export type RowAction =
   | 'edit'
   | 'showInfo'
@@ -62,6 +71,7 @@ export interface InboundListProps {
   clientCount: Record<number, ClientCountEntry>;
   onlineClients: string[];
   lastOnlineMap: Record<string, number>;
+  inboundSpeed: Record<number, InboundSpeedEntry>;
   expireDiff: number;
   trafficDiff: number;
   pageSize: number;
@@ -69,6 +79,7 @@ export interface InboundListProps {
   subEnable: boolean;
   nodesById: Map<number, NodeRecord>;
   hasActiveNode: boolean;
+  hosts: HostRecord[];
   onAddInbound: () => void;
   onGeneralAction: (key: GeneralAction) => void;
   onRowAction: (action: { key: RowAction; dbInbound: DBInboundRecord }) => void;

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Popover, Progress } from 'antd';
 
@@ -17,7 +17,11 @@ export interface ClientTrafficCellProps {
   compact?: boolean;
 }
 
-export default function ClientTrafficCell({
+// Every prop is a primitive and the component is pure, so the memo bails out
+// whenever a client's counters did not move — which is most of them on most
+// pushes. Each skipped instance is one antd Popover (rc-trigger), one Progress,
+// a useTranslation subscription and a theme context read, times up to 200 rows.
+const ClientTrafficCell = memo(function ClientTrafficCell({
   up = 0,
   down = 0,
   total = 0,
@@ -56,7 +60,9 @@ export default function ClientTrafficCell({
     'client-traffic-cell',
     compact ? 'is-compact' : '',
     display.isUnlimited ? 'is-unlimited' : '',
-  ].filter(Boolean).join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <Popover content={popover} trigger={['hover', 'click']} placement="top">
@@ -64,6 +70,7 @@ export default function ClientTrafficCell({
         <span className="client-traffic-cell-used">{SizeFormatter.sizeFormat(display.used)}</span>
         <Progress
           className="client-traffic-cell-bar"
+          aria-label={`${SizeFormatter.sizeFormat(display.used)} / ${display.isUnlimited ? t('subscription.unlimited') : SizeFormatter.sizeFormat(total)}`}
           percent={display.percent}
           showInfo={false}
           strokeColor={display.strokeColor}
@@ -72,7 +79,11 @@ export default function ClientTrafficCell({
         />
         <span className="client-traffic-cell-limit">
           {display.isUnlimited ? (
-            <span className="client-traffic-cell-infinity" aria-label={t('subscription.unlimited')}>
+            <span
+              className="client-traffic-cell-infinity"
+              role="img"
+              aria-label={t('subscription.unlimited')}
+            >
               <InfinityIcon />
             </span>
           ) : (
@@ -82,4 +93,6 @@ export default function ClientTrafficCell({
       </div>
     </Popover>
   );
-}
+});
+
+export default ClientTrafficCell;

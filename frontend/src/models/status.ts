@@ -1,5 +1,10 @@
 import { NumberFormatter } from '@/utils';
 
+export const USAGE_WARN_PERCENT = 80;
+export const USAGE_CRIT_PERCENT = 90;
+export const USAGE_WARN_COLOR = '#faad14';
+export const USAGE_CRIT_COLOR = '#ff4d4f';
+
 export class CurTotal {
   current: number;
   total: number;
@@ -16,9 +21,9 @@ export class CurTotal {
 
   get color(): string {
     const p = this.percent;
-    if (p < 80) return '#1677ff';
-    if (p < 90) return '#faad14';
-    return '#ff4d4f';
+    if (p < USAGE_WARN_PERCENT) return '#1677ff';
+    if (p < USAGE_CRIT_PERCENT) return USAGE_WARN_COLOR;
+    return USAGE_CRIT_COLOR;
   }
 }
 
@@ -56,6 +61,11 @@ export interface XrayInfo {
   color: string;
 }
 
+export interface AmneziaWGInfo {
+  configured: boolean;
+  running: boolean;
+}
+
 interface StatusInput {
   cpu?: number;
   cpuCores?: number;
@@ -74,6 +84,7 @@ interface StatusInput {
   appUptime?: number;
   appStats?: AppStats;
   xray?: Partial<XrayInfo>;
+  amneziawg?: Partial<AmneziaWGInfo>;
 }
 
 export class Status {
@@ -94,6 +105,7 @@ export class Status {
   appUptime = 0;
   appStats: AppStats = { threads: 0, mem: 0, uptime: 0 };
   xray: XrayInfo = { state: 'stop', errorMsg: '', version: '', color: '' };
+  amneziawg: AmneziaWGInfo = { configured: false, running: false };
 
   constructor(data?: StatusInput | null) {
     if (data == null) return;
@@ -116,5 +128,6 @@ export class Status {
     this.appStats = data.appStats ?? this.appStats;
     this.xray = { ...this.xray, ...(data.xray || {}) };
     this.xray.color = XRAY_STATE_COLORS[this.xray.state] ?? 'gray';
+    this.amneziawg = { ...this.amneziawg, ...(data.amneziawg || {}) };
   }
 }

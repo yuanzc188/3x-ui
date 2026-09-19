@@ -2,6 +2,7 @@ package xray
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,18 +66,7 @@ func GetIPLimitBannedPrevLogPath() string {
 	return config.GetLogFolder() + "/3xipl-banned.prev.log"
 }
 
-// GetAccessPersistentLogPath returns the path to the persistent access log file.
-func GetAccessPersistentLogPath() string {
-	return config.GetLogFolder() + "/3xipl-ap.log"
-}
-
-// GetAccessPersistentPrevLogPath returns the path to the previous persistent access log file.
-func GetAccessPersistentPrevLogPath() string {
-	return config.GetLogFolder() + "/3xipl-ap.prev.log"
-}
-
-// GetAccessLogPath reads the Xray config and returns the access log file path.
-func GetAccessLogPath() (string, error) {
+func getLogPath(key string) (string, error) {
 	config, err := os.ReadFile(GetConfigPath())
 	if err != nil {
 		logger.Warningf("Failed to read configuration file: %s", err)
@@ -84,25 +74,33 @@ func GetAccessLogPath() (string, error) {
 	}
 
 	jsonConfig := map[string]any{}
-	err = json.Unmarshal([]byte(config), &jsonConfig)
+	err = json.Unmarshal(config, &jsonConfig)
 	if err != nil {
 		logger.Warningf("Failed to parse JSON configuration: %s", err)
 		return "", err
 	}
 
-	if jsonConfig["log"] != nil {
-		jsonLog := jsonConfig["log"].(map[string]any)
-		if jsonLog["access"] != nil {
-			accessLogPath := jsonLog["access"].(string)
-			return accessLogPath, nil
+	if jsonLog, ok := jsonConfig["log"].(map[string]any); ok {
+		if logPath, ok := jsonLog[key].(string); ok {
+			return logPath, nil
 		}
 	}
-	return "", err
+	return "", nil
+}
+
+// GetAccessLogPath reads the Xray config and returns the access log file path.
+func GetAccessLogPath() (string, error) {
+	return getLogPath("access")
+}
+
+// GetErrorLogPath reads the Xray config and returns the error log file path.
+func GetErrorLogPath() (string, error) {
+	return getLogPath("error")
 }
 
 // stopProcess calls Stop on the given Process instance.
 func stopProcess(p *Process) {
-	p.Stop()
+	_ = p.Stop()
 }
 
 // Process wraps an Xray process instance and provides management methods.
@@ -127,6 +125,14 @@ func NewTestProcess(xrayConfig *Config, configPath string) *Process {
 }
 
 type process struct {
+	// mu guards the process lifecycle fields (cmd, done, exitErr) plus version,
+	// apiPort, and config, which are written by Start/startCommand/refreshVersion/
+	// refreshAPIPort/SetConfig
+	// while being read concurrently by IsRunning/GetErr/GetResult/GetXrayVersion/
+	// GetAPIPort/Stop from other goroutines (status endpoint, check-xray-running
+	// and traffic jobs). Snapshot under the lock, then do any blocking syscall
+	// (Wait/Signal/Kill) on the local copy without holding it.
+	mu   sync.RWMutex
 	cmd  *exec.Cmd
 	done chan struct{}
 
@@ -170,7 +176,12 @@ type process struct {
 	// mutex guards this map, onlineClients, and localLastOnline above so the
 	// online getters never see a torn read.
 	nodeOnlineTrees map[int]map[string][]string
-	onlineMu        sync.RWMutex
+	// nodeActiveInboundTrees mirrors nodeOnlineTrees for active inbound tags:
+	// each direct node reports a GUID-keyed subtree of inbound tags that carried
+	// traffic within its own grace window. The inbounds page combines this with
+	// nodeOnlineTrees so a multi-inbound client is not shown on an idle inbound.
+	nodeActiveInboundTrees map[int]map[string][]string
+	onlineMu               sync.RWMutex
 
 	// onlineAPISupport caches whether the running core implements the
 	// online-stats RPCs (GetUsersStats). A new process is created on every
@@ -213,6 +224,9 @@ func (p *process) SetOnlineAPISupport(v OnlineAPISupport) {
 var (
 	xrayGracefulStopTimeout = 5 * time.Second
 	xrayForceStopTimeout    = 2 * time.Second
+	xrayVersionTimeout      = 5 * time.Second
+	// OnCrash is called when xray crashes unexpectedly. Set from web layer.
+	OnCrash func(err error)
 )
 
 // newProcess creates a new internal process struct for Xray.
@@ -234,47 +248,62 @@ func newTestProcess(config *Config, configPath string) *process {
 
 // IsRunning returns true if the Xray process is currently running.
 func (p *process) IsRunning() bool {
-	if p.cmd == nil || p.cmd.Process == nil {
+	p.mu.RLock()
+	cmd, done := p.cmd, p.done
+	p.mu.RUnlock()
+	if cmd == nil || cmd.Process == nil {
 		return false
 	}
-	if p.done != nil {
+	// done is closed by the waitForCommand goroutine exactly when cmd.Wait
+	// returns, i.e. when the process has exited; it is the race-free signal here
+	// (reading cmd.ProcessState would race with that Wait).
+	if done != nil {
 		select {
-		case <-p.done:
+		case <-done:
 			return false
 		default:
 		}
 	}
-	if p.cmd.ProcessState == nil {
-		return true
-	}
-	return false
+	return true
 }
 
 // GetErr returns the last error encountered by the Xray process.
 func (p *process) GetErr() error {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.exitErr
 }
 
 // GetResult returns the last log line or error from the Xray process.
 func (p *process) GetResult() string {
-	if len(p.logWriter.lastLine) == 0 && p.exitErr != nil {
-		return p.exitErr.Error()
+	p.mu.RLock()
+	exitErr := p.exitErr
+	p.mu.RUnlock()
+	lastLine := p.logWriter.LastLine()
+	if len(lastLine) == 0 && exitErr != nil {
+		return exitErr.Error()
 	}
-	return p.logWriter.lastLine
+	return lastLine
 }
 
-// GetVersion returns the version string of the Xray process.
-func (p *process) GetVersion() string {
+// GetXrayVersion returns the version string of the Xray process.
+func (p *process) GetXrayVersion() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.version
 }
 
 // GetAPIPort returns the API port used by the Xray process.
 func (p *Process) GetAPIPort() int {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.apiPort
 }
 
 // GetConfig returns the configuration used by the Xray process.
 func (p *Process) GetConfig() *Config {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.config
 }
 
@@ -282,6 +311,8 @@ func (p *Process) GetConfig() *Config {
 // process has been reconciled with it through the gRPC API (hot apply), so
 // later change detection compares against what is actually running.
 func (p *Process) SetConfig(config *Config) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.config = config
 }
 
@@ -372,10 +403,9 @@ func (p *Process) GetMergedNodeTrees() map[string][]string {
 }
 
 // GetLocalActiveInbounds returns a copy of THIS panel's inbound tags that
-// carried traffic within the grace window. Only the local xray reports
-// per-inbound activity; remote-node snapshots don't carry it, so the service
-// layer keys these under the panel's own GUID and a node missing from the
-// active-inbounds map means "don't gate" (fall back to the email-only signal).
+// carried traffic within the grace window. The service layer keys these under
+// the panel's own GUID before merging them with remote-node active-inbound
+// subtrees.
 func (p *Process) GetLocalActiveInbounds() []string {
 	p.onlineMu.RLock()
 	defer p.onlineMu.RUnlock()
@@ -384,6 +414,43 @@ func (p *Process) GetLocalActiveInbounds() []string {
 	}
 	out := make([]string, len(p.localActiveInbounds))
 	copy(out, p.localActiveInbounds)
+	return out
+}
+
+// GetMergedActiveInboundTrees returns the union of every direct node's reported
+// active-inbound subtree, keyed by the panelGuid of the node that physically
+// hosts each inbound. Duplicate tags reported through multiple paths are
+// deduped per GUID.
+func (p *Process) GetMergedActiveInboundTrees() map[string][]string {
+	p.onlineMu.RLock()
+	defer p.onlineMu.RUnlock()
+	if len(p.nodeActiveInboundTrees) == 0 {
+		return map[string][]string{}
+	}
+	out := make(map[string][]string)
+	seen := make(map[string]map[string]struct{})
+	for _, tree := range p.nodeActiveInboundTrees {
+		for guid, tags := range tree {
+			if guid == "" || len(tags) == 0 {
+				continue
+			}
+			dedup := seen[guid]
+			if dedup == nil {
+				dedup = make(map[string]struct{}, len(tags))
+				seen[guid] = dedup
+			}
+			for _, tag := range tags {
+				if tag == "" {
+					continue
+				}
+				if _, ok := dedup[tag]; ok {
+					continue
+				}
+				dedup[tag] = struct{}{}
+				out[guid] = append(out[guid], tag)
+			}
+		}
+	}
 	return out
 }
 
@@ -436,10 +503,29 @@ func (p *Process) RefreshLocalOnline(activeEmails, activeInboundTags []string, n
 func (p *Process) SetNodeOnlineTree(nodeID int, tree map[string][]string) {
 	p.onlineMu.Lock()
 	defer p.onlineMu.Unlock()
+	if len(tree) == 0 {
+		delete(p.nodeOnlineTrees, nodeID)
+		return
+	}
 	if p.nodeOnlineTrees == nil {
 		p.nodeOnlineTrees = map[int]map[string][]string{}
 	}
 	p.nodeOnlineTrees[nodeID] = tree
+}
+
+// SetNodeActiveInboundTree records the GUID-keyed active-inbound subtree one
+// direct remote node reported. Replaces any previous entry for that node.
+func (p *Process) SetNodeActiveInboundTree(nodeID int, tree map[string][]string) {
+	p.onlineMu.Lock()
+	defer p.onlineMu.Unlock()
+	if len(tree) == 0 {
+		delete(p.nodeActiveInboundTrees, nodeID)
+		return
+	}
+	if p.nodeActiveInboundTrees == nil {
+		p.nodeActiveInboundTrees = map[int]map[string][]string{}
+	}
+	p.nodeActiveInboundTrees[nodeID] = tree
 }
 
 // ClearNodeOnlineClients drops a direct node's whole subtree contribution.
@@ -449,6 +535,24 @@ func (p *Process) ClearNodeOnlineClients(nodeID int) {
 	p.onlineMu.Lock()
 	defer p.onlineMu.Unlock()
 	delete(p.nodeOnlineTrees, nodeID)
+	delete(p.nodeActiveInboundTrees, nodeID)
+}
+
+// RetainNodeOnlineClients drops the subtree of every direct node keep rejects: nodes
+// the master stopped syncing without a failed probe (disabled, offline, deleted).
+func (p *Process) RetainNodeOnlineClients(keep func(nodeID int) bool) {
+	p.onlineMu.Lock()
+	defer p.onlineMu.Unlock()
+	for nodeID := range p.nodeOnlineTrees {
+		if !keep(nodeID) {
+			delete(p.nodeOnlineTrees, nodeID)
+		}
+	}
+	for nodeID := range p.nodeActiveInboundTrees {
+		if !keep(nodeID) {
+			delete(p.nodeActiveInboundTrees, nodeID)
+		}
+	}
 }
 
 // GetUptime returns the uptime of the Xray process in seconds.
@@ -458,28 +562,32 @@ func (p *Process) GetUptime() uint64 {
 
 // refreshAPIPort updates the API port from the inbound configs.
 func (p *process) refreshAPIPort() {
+	port := 0
 	for _, inbound := range p.config.InboundConfigs {
 		if inbound.Tag == "api" {
-			p.apiPort = inbound.Port
+			port = inbound.Port
 			break
 		}
 	}
+	p.mu.Lock()
+	p.apiPort = port
+	p.mu.Unlock()
 }
 
 // refreshVersion updates the version string by running the Xray binary with -version.
 func (p *process) refreshVersion() {
-	cmd := exec.Command(GetBinaryPath(), "-version")
-	data, err := cmd.Output()
-	if err != nil {
-		p.version = "Unknown"
-	} else {
-		datas := bytes.Split(data, []byte(" "))
-		if len(datas) <= 1 {
-			p.version = "Unknown"
-		} else {
-			p.version = string(datas[1])
+	version := "Unknown"
+	ctx, cancel := context.WithTimeout(context.Background(), xrayVersionTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, GetBinaryPath(), "-version")
+	if data, err := cmd.Output(); err == nil {
+		if datas := bytes.Split(data, []byte(" ")); len(datas) > 1 {
+			version = string(datas[1])
 		}
 	}
+	p.mu.Lock()
+	p.version = version
+	p.mu.Unlock()
 }
 
 // Start launches the Xray process with the current configuration.
@@ -491,7 +599,7 @@ func (p *process) Start() (err error) {
 	defer func() {
 		if err != nil {
 			logger.Error("Failure in running xray-core process: ", err)
-			p.exitErr = err
+			p.setExitErr(err)
 		}
 	}()
 
@@ -509,12 +617,12 @@ func (p *process) Start() (err error) {
 	if p.configPath != "" {
 		configPath = p.configPath
 	}
-	err = os.WriteFile(configPath, data, 0644)
+	err = writeFileAtomic(configPath, data, 0o600)
 	if err != nil {
 		return common.NewErrorf("Failed to write configuration file: %v", err)
 	}
 
-	cmd := exec.Command(GetBinaryPath(), "-c", configPath)
+	cmd := exec.CommandContext(context.Background(), GetBinaryPath(), "-c", configPath)
 	cmd.Stdout = p.logWriter
 	cmd.Stderr = p.logWriter
 
@@ -529,26 +637,85 @@ func (p *process) Start() (err error) {
 	return nil
 }
 
+// writeFileAtomic writes data to path via a same-directory temp file that is
+// permissioned, synced, and renamed into place, so a crash can never leave a
+// partial config; the config holds credentials, hence the 0600 perm. After the
+// rename the parent directory is fsynced to persist the directory entry. That
+// final step is skipped on Windows, where directory fsync is unsupported and
+// os.Rename already uses replace-existing semantics.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		if err != nil {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err = tmp.Chmod(perm); err != nil {
+		return err
+	}
+	if _, err = tmp.Write(data); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = renameFile(tmpPath, path); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dirHandle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = dirHandle.Sync()
+	_ = dirHandle.Close()
+	return err
+}
+
+var renameFile = os.Rename
+
 func (p *process) startCommand(cmd *exec.Cmd) error {
+	p.mu.Lock()
 	p.cmd = cmd
 	p.done = make(chan struct{})
 	p.exitErr = nil
+	done := p.done
+	p.mu.Unlock()
 	p.intentionalStop.Store(false)
 
 	if err := cmd.Start(); err != nil {
-		close(p.done)
+		close(done)
+		p.mu.Lock()
 		p.cmd = nil
+		p.mu.Unlock()
 		return err
 	}
 
 	attachChildLifetime(cmd)
 
-	go p.waitForCommand(cmd)
+	go p.waitForCommand(cmd, done)
 	return nil
 }
 
-func (p *process) waitForCommand(cmd *exec.Cmd) {
-	defer close(p.done)
+func (p *process) setExitErr(err error) {
+	p.mu.Lock()
+	p.exitErr = err
+	p.mu.Unlock()
+}
+
+func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
+	defer close(done)
 
 	err := cmd.Wait()
 	if err == nil || p.intentionalStop.Load() {
@@ -559,13 +726,16 @@ func (p *process) waitForCommand(cmd *exec.Cmd) {
 	if runtime.GOOS == "windows" {
 		errStr := strings.ToLower(err.Error())
 		if strings.Contains(errStr, "exit status 1") {
-			p.exitErr = err
+			p.setExitErr(err)
 			return
 		}
 	}
 
 	logger.Error("Failure in running xray-core:", err)
-	p.exitErr = err
+	p.setExitErr(err)
+	if OnCrash != nil {
+		OnCrash(err)
+	}
 }
 
 // Stop terminates the running Xray process.
@@ -574,6 +744,15 @@ func (p *process) Stop() error {
 		return errors.New("xray is not running")
 	}
 	p.intentionalStop.Store(true)
+
+	// Snapshot cmd once, then run the blocking Signal/Kill/Wait on the local copy
+	// without holding the lock.
+	p.mu.RLock()
+	cmd := p.cmd
+	p.mu.RUnlock()
+	if cmd == nil || cmd.Process == nil {
+		return errors.New("xray is not running")
+	}
 
 	// Remove temporary config file used for test runs so main config is never touched
 	if p.configPath != "" {
@@ -586,13 +765,13 @@ func (p *process) Stop() error {
 	}
 
 	if runtime.GOOS == "windows" {
-		if err := p.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return err
 		}
 		return p.waitForExit(xrayForceStopTimeout)
 	}
 
-	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		if errors.Is(err, os.ErrProcessDone) {
 			return p.waitForExit(xrayForceStopTimeout)
 		}
@@ -604,14 +783,17 @@ func (p *process) Stop() error {
 	}
 
 	logger.Warning("xray-core did not stop after SIGTERM, killing process")
-	if err := p.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
 	return p.waitForExit(xrayForceStopTimeout)
 }
 
 func (p *process) waitForExit(timeout time.Duration) error {
-	if p.done == nil {
+	p.mu.RLock()
+	done := p.done
+	p.mu.RUnlock()
+	if done == nil {
 		return nil
 	}
 
@@ -619,7 +801,7 @@ func (p *process) waitForExit(timeout time.Duration) error {
 	defer timer.Stop()
 
 	select {
-	case <-p.done:
+	case <-done:
 		return nil
 	case <-timer.C:
 		return common.NewErrorf("timed out waiting for xray-core process to stop after %s", timeout)

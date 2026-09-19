@@ -16,8 +16,10 @@ const PACKET_UP_FIELDS = [
 const STREAM_UP_SERVER_FIELDS = ['scStreamUpServerSecs'] as const;
 
 const PLACEMENT_STRING_FIELDS = [
-  'sessionPlacement',
-  'sessionKey',
+  'sessionIDPlacement',
+  'sessionIDKey',
+  'sessionIDTable',
+  'sessionIDLength',
   'seqPlacement',
   'seqKey',
   'uplinkDataPlacement',
@@ -39,6 +41,32 @@ function nonEmptyString(v: unknown): v is string {
 
 function hasMeaningfulHeaders(headers: unknown): boolean {
   return isRecord(headers) && Object.keys(headers).length > 0;
+}
+
+// Upper bound of an xray-core Int32Range value: "16-32" -> 32, "4" -> 4,
+// 4 -> 4, "" / null -> 0. xmux fields are ranges, and xray-core keys its
+// mutual-exclusivity check on the `.To` (upper) side.
+export function int32RangeUpper(v: unknown): number {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  if (typeof v !== 'string') return 0;
+  const trimmed = v.trim();
+  if (trimmed === '') return 0;
+  const parts = trimmed.split('-');
+  const n = Number(parts[parts.length - 1]);
+  return Number.isFinite(n) ? n : 0;
+}
+
+// xray-core's XmuxConfig rejects a config that sets BOTH maxConnections
+// and maxConcurrency. A positive maxConnections is an explicit opt-in to
+// connection-pool mode — honor it and drop the leftover maxConcurrency
+// default that load-time hydration backfills onto older saved configs.
+function resolveXmuxExclusivity(xmux: Record<string, unknown>): Record<string, unknown> {
+  if (int32RangeUpper(xmux.maxConnections) > 0 && int32RangeUpper(xmux.maxConcurrency) > 0) {
+    const out = { ...xmux };
+    delete out.maxConcurrency;
+    return out;
+  }
+  return xmux;
 }
 
 /** Validates REALITY inbound `target` / `dest` (must include a port). */
@@ -76,6 +104,73 @@ export function validateRealityTarget(target: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Parses a REALITY client-version string the way xray-core's config loader
+ * does: one to three dot-separated numeric parts, each 0-255. Returns the
+ * parts padded to three entries, or undefined when the string is not a valid
+ * version.
+ */
+export function parseRealityClientVer(value: string): [number, number, number] | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parts = trimmed.split('.');
+  if (parts.length > 3) return undefined;
+  const nums: number[] = [];
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) return undefined;
+    const n = Number(part);
+    if (n > 255) return undefined;
+    nums.push(n);
+  }
+  while (nums.length < 3) nums.push(0);
+  return nums as [number, number, number];
+}
+
+/**
+ * Validates a REALITY client-version field; empty means "not set" and is
+ * valid. The value is saved exactly as typed and xray-core's part parser
+ * accepts no surrounding whitespace, so a value that differs from its
+ * trimmed form is rejected rather than silently passed to the wire.
+ */
+export function validateRealityClientVer(value: string): string | undefined {
+  if (!value) return undefined;
+  if (value !== value.trim() || !parseRealityClientVer(value)) {
+    return 'pages.inbounds.form.clientVerInvalid';
+  }
+  return undefined;
+}
+
+/**
+ * Validates the max client-version field: format first, then that a non-empty
+ * max is not below a non-empty min (an inverted range rejects every client).
+ * An empty or malformed min is left to the min field's own validation.
+ */
+export function validateRealityMaxClientVer(max: string, min: string): string | undefined {
+  const formatError = validateRealityClientVer(max);
+  if (formatError) return formatError;
+  const maxParts = parseRealityClientVer(max);
+  const minParts = parseRealityClientVer(min);
+  if (!maxParts || !minParts) return undefined;
+  for (let i = 0; i < 3; i++) {
+    if (maxParts[i] !== minParts[i]) {
+      return maxParts[i] < minParts[i] ? 'pages.inbounds.form.maxClientVerBelowMin' : undefined;
+    }
+  }
+  return undefined;
+}
+
+function liftLegacyXhttpSessionKeys(obj: Record<string, unknown>): void {
+  const lift = (legacy: string, renamed: string) => {
+    const v = obj[legacy];
+    if ((obj[renamed] === undefined || obj[renamed] === '') && typeof v === 'string' && v !== '') {
+      obj[renamed] = v;
+    }
+    delete obj[legacy];
+  };
+  lift('sessionPlacement', 'sessionIDPlacement');
+  lift('sessionKey', 'sessionIDKey');
+}
+
 function dropEmptyStrings(obj: Record<string, unknown>, keys: readonly string[]): void {
   for (const key of keys) {
     const v = obj[key];
@@ -99,6 +194,20 @@ function normalizeTlsForWire(raw: Record<string, unknown>): Record<string, unkno
   const out: Record<string, unknown> = { ...raw };
   if (out.fingerprint === '') delete out.fingerprint;
 
+  // Empty server-side tuning fields mean "use xray-core's default" — never emit them.
+  if (Array.isArray(out.curvePreferences) && out.curvePreferences.length === 0) {
+    delete out.curvePreferences;
+  }
+  if (out.masterKeyLog === '' || out.masterKeyLog == null) delete out.masterKeyLog;
+  if (isRecord(out.echSockopt)) {
+    const echSock = normalizeSockoptForWire(out.echSockopt);
+    if (echSock) {
+      out.echSockopt = echSock;
+    } else {
+      delete out.echSockopt;
+    }
+  }
+
   const settings = out.settings;
   if (isRecord(settings)) {
     const settingsOut: Record<string, unknown> = { ...settings };
@@ -114,14 +223,24 @@ export function normalizeXhttpForWire(
   side: StreamWireSide,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...raw };
+  liftLegacyXhttpSessionKeys(out);
   const mode = typeof out.mode === 'string' && out.mode !== '' ? out.mode : 'auto';
-
+  const enableXmux = out.enableXmux === true;
   delete out.enableXmux;
 
   if (side === 'inbound') {
-    delete out.xmux;
-    delete out.scMinPostsIntervalMs;
+    if (!enableXmux) delete out.xmux;
+    // scMinPostsIntervalMs is a client-only tuning knob that subscriptions
+    // must propagate to clients. Only strip the xray-core default ("30")
+    // or empty values — the literal "30" is a known DPI fingerprint (#5141).
+    if (out.scMinPostsIntervalMs === '' || out.scMinPostsIntervalMs === '30') {
+      delete out.scMinPostsIntervalMs;
+    }
     delete out.uplinkChunkSize;
+  }
+
+  if (isRecord(out.xmux)) {
+    out.xmux = resolveXmuxExclusivity(out.xmux);
   }
 
   dropEmptyStrings(out, PLACEMENT_STRING_FIELDS);
@@ -134,12 +253,7 @@ export function normalizeXhttpForWire(
 
   if (out.xPaddingObfsMode !== true) {
     delete out.xPaddingObfsMode;
-    dropEmptyStrings(out, [
-      'xPaddingKey',
-      'xPaddingHeader',
-      'xPaddingPlacement',
-      'xPaddingMethod',
-    ]);
+    dropEmptyStrings(out, ['xPaddingKey', 'xPaddingHeader', 'xPaddingPlacement', 'xPaddingMethod']);
   }
 
   if (out.noGRPCHeader !== true) delete out.noGRPCHeader;
@@ -176,13 +290,7 @@ export function normalizeSockoptForWire(
     'mark',
   ]);
 
-  dropFalseFlags(out, [
-    'acceptProxyProtocol',
-    'tcpFastOpen',
-    'tcpMptcp',
-    'penetrate',
-    'V6Only',
-  ]);
+  dropFalseFlags(out, ['acceptProxyProtocol', 'tcpFastOpen', 'tcpMptcp', 'penetrate', 'V6Only']);
 
   if (out.tproxy === 'off') delete out.tproxy;
   if (out.domainStrategy === 'AsIs') delete out.domainStrategy;
@@ -199,7 +307,6 @@ export function normalizeSockoptForWire(
   const he = out.happyEyeballs;
   if (isRecord(he)) {
     const heOut: Record<string, unknown> = { ...he };
-    if (heOut.tryDelayMs === 0) delete heOut.tryDelayMs;
     if (heOut.prioritizeIPv6 === false) delete heOut.prioritizeIPv6;
     if (heOut.interleave === 1) delete heOut.interleave;
     if (heOut.maxConcurrentTry === 4) delete heOut.maxConcurrentTry;

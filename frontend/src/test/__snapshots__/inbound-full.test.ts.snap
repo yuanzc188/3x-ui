@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] = `
+exports[`InboundSchema (full) fixtures > parses hysteria-tls byte-stably 1`] = `
 {
   "down": 0,
   "enable": true,
@@ -9,7 +9,7 @@ exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] 
   "listen": "",
   "port": 36715,
   "protocol": "hysteria",
-  "remark": "gina-hysteria-v1",
+  "remark": "gina-hysteria",
   "settings": {
     "clients": [
       {
@@ -25,7 +25,7 @@ exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] 
         "totalGB": 0,
       },
     ],
-    "version": 1,
+    "version": 2,
   },
   "shareAddr": "",
   "shareAddrStrategy": "node",
@@ -57,7 +57,7 @@ exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] 
           "buildChain": false,
           "certificateFile": "/etc/ssl/certs/hysteria.crt",
           "keyFile": "/etc/ssl/private/hysteria.key",
-          "ocspStapling": 3600,
+          "ocspStapling": 0,
           "oneTimeLoading": false,
           "usage": "encipherment",
         },
@@ -74,10 +74,11 @@ exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] 
         "echConfigList": "",
         "fingerprint": "chrome",
         "pinnedPeerCertSha256": [],
+        "verifyPeerCertByName": "",
       },
     },
   },
-  "tag": "inbound-hysteria-v1",
+  "tag": "inbound-hysteria",
   "total": 0,
   "up": 0,
 }
@@ -200,7 +201,7 @@ exports[`InboundSchema (full) fixtures > parses trojan-ws-tls byte-stably 1`] = 
           "buildChain": false,
           "certificateFile": "/etc/ssl/certs/trojan.crt",
           "keyFile": "/etc/ssl/private/trojan.key",
-          "ocspStapling": 3600,
+          "ocspStapling": 0,
           "oneTimeLoading": false,
           "usage": "encipherment",
         },
@@ -217,6 +218,7 @@ exports[`InboundSchema (full) fixtures > parses trojan-ws-tls byte-stably 1`] = 
         "echConfigList": "",
         "fingerprint": "chrome",
         "pinnedPeerCertSha256": [],
+        "verifyPeerCertByName": "",
       },
     },
     "wsSettings": {
@@ -377,7 +379,7 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls byte-stably 1`] = `
           "buildChain": false,
           "certificateFile": "/etc/ssl/certs/cdn.example.test.crt",
           "keyFile": "/etc/ssl/private/cdn.example.test.key",
-          "ocspStapling": 3600,
+          "ocspStapling": 0,
           "oneTimeLoading": false,
           "usage": "encipherment",
         },
@@ -394,6 +396,7 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls byte-stably 1`] = `
         "echConfigList": "",
         "fingerprint": "chrome",
         "pinnedPeerCertSha256": [],
+        "verifyPeerCertByName": "",
       },
     },
     "wsSettings": {
@@ -468,7 +471,7 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls-pinned byte-stably 
           "buildChain": false,
           "certificateFile": "/etc/ssl/certs/cdn.example.test.crt",
           "keyFile": "/etc/ssl/private/cdn.example.test.key",
-          "ocspStapling": 3600,
+          "ocspStapling": 0,
           "oneTimeLoading": false,
           "usage": "encipherment",
         },
@@ -488,6 +491,7 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls-pinned byte-stably 
           "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
           "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
         ],
+        "verifyPeerCertByName": "",
       },
     },
     "wsSettings": {
@@ -566,7 +570,7 @@ exports[`InboundSchema (full) fixtures > parses vmess-tcp-tls byte-stably 1`] = 
           "buildChain": false,
           "certificateFile": "/etc/ssl/certs/vmess.crt",
           "keyFile": "/etc/ssl/private/vmess.key",
-          "ocspStapling": 3600,
+          "ocspStapling": 0,
           "oneTimeLoading": false,
           "usage": "encipherment",
         },
@@ -583,6 +587,7 @@ exports[`InboundSchema (full) fixtures > parses vmess-tcp-tls byte-stably 1`] = 
         "echConfigList": "",
         "fingerprint": "chrome",
         "pinnedPeerCertSha256": [],
+        "verifyPeerCertByName": "",
       },
     },
   },
@@ -603,6 +608,7 @@ exports[`InboundSchema (full) fixtures > parses wireguard-server byte-stably 1`]
   "protocol": "wireguard",
   "remark": "wg-server",
   "settings": {
+    "clients": [],
     "mtu": 1420,
     "noKernelTun": false,
     "peers": [
@@ -616,6 +622,7 @@ exports[`InboundSchema (full) fixtures > parses wireguard-server byte-stably 1`]
       },
     ],
     "secretKey": "iJ2cBkrSGqRwIfYIDIxk7hr5RXfdR93MfJUL7yqkkH8=",
+    "subnetIp": "",
   },
   "shareAddr": "",
   "shareAddrStrategy": "node",

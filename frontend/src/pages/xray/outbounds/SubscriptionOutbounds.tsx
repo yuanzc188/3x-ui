@@ -1,26 +1,26 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Popover, Table, Tag, Tooltip } from 'antd';
-import {
-  ThunderboltOutlined,
-  CheckCircleFilled,
-  CloseCircleFilled,
-  LoadingOutlined,
-} from '@ant-design/icons';
+import { Button, Table, Tag, Tooltip } from 'antd';
+import { ThunderboltOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
 import { SizeFormatter } from '@/utils';
 import { OutboundProtocols as Protocols } from '@/schemas/primitives';
-import { isUdpOutbound } from '@/hooks/useXraySetting';
-import type { OutboundTestState, OutboundTrafficRow } from '@/hooks/useXraySetting';
+import type {
+  OutboundTestMode,
+  OutboundTestState,
+  OutboundTrafficRow,
+} from '@/hooks/useXraySetting';
 
 import type { OutboundRow } from './outbounds-tab-types';
+import TestResultPopover from './TestResultPopover';
 import {
-  hasBreakdown,
+  effectiveTestMode,
   isTesting,
   isUntestable,
   outboundAddresses,
   showSecurity,
+  testModeLabel,
   testResult,
   trafficFor,
 } from './outbounds-tab-helpers';
@@ -29,7 +29,7 @@ interface SubscriptionOutboundsProps {
   subscriptionOutbounds: unknown[];
   outboundsTraffic: OutboundTrafficRow[];
   subscriptionTestStates: Record<string, OutboundTestState>;
-  testMode: 'tcp' | 'http';
+  testMode: OutboundTestMode;
   isMobile: boolean;
   onTestSubscription: (outbound: Record<string, unknown>, mode: string) => void;
 }
@@ -48,7 +48,8 @@ export default function SubscriptionOutbounds({
   const { t } = useTranslation();
 
   const rows = useMemo<OutboundRow[]>(
-    () => (subscriptionOutbounds || []).map((o, i) => ({ ...(o as object), key: i }) as OutboundRow),
+    () =>
+      (subscriptionOutbounds || []).map((o, i) => ({ ...(o as object), key: i }) as OutboundRow),
     [subscriptionOutbounds],
   );
 
@@ -61,10 +62,14 @@ export default function SubscriptionOutbounds({
       </Tooltip>
       <div className="protocol-line">
         <Tag color="green">{record.protocol}</Tag>
-        {[Protocols.VMess, Protocols.VLESS, Protocols.Trojan, Protocols.Shadowsocks].includes(record.protocol as never) && (
+        {[Protocols.VMess, Protocols.VLESS, Protocols.Trojan, Protocols.Shadowsocks].includes(
+          record.protocol as never,
+        ) && (
           <>
             <Tag>{record.streamSettings?.network}</Tag>
-            {showSecurity(record.streamSettings?.security) && <Tag color="purple">{record.streamSettings?.security}</Tag>}
+            {showSecurity(record.streamSettings?.security) && (
+              <Tag color="purple">{record.streamSettings?.security}</Tag>
+            )}
           </>
         )}
       </div>
@@ -102,49 +107,26 @@ export default function SubscriptionOutbounds({
   const latencyCell = (record: OutboundRow) => {
     const key = record.tag || '';
     const r = testResult(subscriptionTestStates, key);
-    if (!r) return isTesting(subscriptionTestStates, key) ? <LoadingOutlined /> : <span className="empty">—</span>;
-    return (
-      <Popover
-        placement="topLeft"
-        rootClassName="outbound-test-popover"
-        content={
-          <div className="timing-breakdown">
-            <div className={`td-head ${r.success ? 'ok' : 'fail'}`}>
-              {r.success ? <span>{r.delay} ms</span> : <span>{r.error || 'failed'}</span>}
-              {r.mode && <span className="mode-badge">{String(r.mode).toUpperCase()}</span>}
-            </div>
-            {hasBreakdown(r) && (
-              <>
-                {(r.endpoints || []).map((ep) => (
-                  <div key={ep.address} className="endpoint-row">
-                    <span className={ep.success ? 'dot-ok' : 'dot-fail'}>●</span>
-                    <span className="ep-addr">{ep.address}</span>
-                    <span className="ep-meta">{ep.success ? `${ep.delay} ms` : ep.error || 'failed'}</span>
-                  </div>
-                ))}
-              </>
-            )}
-          </div>
-        }
-      >
-        <span className={r.success ? 'pill-ok' : 'pill-fail'}>
-          {r.success ? <CheckCircleFilled /> : <CloseCircleFilled />}
-          {r.success ? <span>{r.delay}&nbsp;ms</span> : <span>failed</span>}
-        </span>
-      </Popover>
-    );
+    if (!r)
+      return isTesting(subscriptionTestStates, key) ? (
+        <LoadingOutlined />
+      ) : (
+        <span className="empty">—</span>
+      );
+    return <TestResultPopover result={r} />;
   };
 
   const testButton = (record: OutboundRow) => {
     const key = record.tag || '';
     return (
-      <Tooltip title={`${t('check')} (${(isUdpOutbound(record) ? 'http' : testMode).toUpperCase()})`}>
+      <Tooltip title={`${t('check')} (${testModeLabel(effectiveTestMode(record, testMode), t)})`}>
         <Button
+          aria-label={t('check')}
           type="primary"
           shape="circle"
           size={isMobile ? 'small' : undefined}
           loading={isTesting(subscriptionTestStates, key)}
-          disabled={!record.tag || isUntestable(record, testMode) || isTesting(subscriptionTestStates, key)}
+          disabled={!record.tag || isUntestable(record) || isTesting(subscriptionTestStates, key)}
           icon={<ThunderboltOutlined />}
           onClick={() => onTestSubscription(record as unknown as Record<string, unknown>, testMode)}
         />
@@ -154,7 +136,9 @@ export default function SubscriptionOutbounds({
 
   const header = (
     <div className="subscription-outbounds-head">
-      <div className="subscription-outbounds-title">{t('pages.xray.outboundSub.fromSubsTitle')}</div>
+      <div className="subscription-outbounds-title">
+        {t('pages.xray.outboundSub.fromSubsTitle')}
+      </div>
       <div className="subscription-outbounds-desc">{t('pages.xray.outboundSub.fromSubsDesc')}</div>
     </div>
   );
@@ -191,17 +175,51 @@ export default function SubscriptionOutbounds({
       width: 60,
       render: (_v, _record, index) => <span className="row-index">{index + 1}</span>,
     },
-    { title: t('pages.xray.outbound.tag'), key: 'identity', align: 'left', render: (_v, record) => identityCell(record) },
-    { title: t('pages.inbounds.address'), key: 'address', align: 'left', render: (_v, record) => addressCell(record) },
-    { title: t('pages.inbounds.traffic'), key: 'traffic', align: 'left', width: 200, render: (_v, record) => trafficCell(record) },
-    { title: t('pages.nodes.latency'), key: 'testResult', align: 'left', width: 140, render: (_v, record) => latencyCell(record) },
-    { title: t('check'), key: 'test', align: 'center', width: 80, render: (_v, record) => testButton(record) },
+    {
+      title: t('pages.xray.outbound.tag'),
+      key: 'identity',
+      align: 'left',
+      render: (_v, record) => identityCell(record),
+    },
+    {
+      title: t('pages.inbounds.address'),
+      key: 'address',
+      align: 'left',
+      render: (_v, record) => addressCell(record),
+    },
+    {
+      title: t('pages.inbounds.traffic'),
+      key: 'traffic',
+      align: 'left',
+      width: 200,
+      render: (_v, record) => trafficCell(record),
+    },
+    {
+      title: t('pages.nodes.latency'),
+      key: 'testResult',
+      align: 'left',
+      width: 140,
+      render: (_v, record) => latencyCell(record),
+    },
+    {
+      title: t('check'),
+      key: 'test',
+      align: 'center',
+      width: 80,
+      render: (_v, record) => testButton(record),
+    },
   ];
 
   return (
     <div className="subscription-outbounds" style={{ marginTop: 16 }}>
       {header}
-      <Table columns={columns} dataSource={rows} rowKey={(r) => r.key} pagination={false} size="small" />
+      <Table
+        columns={columns}
+        dataSource={rows}
+        rowKey={(r) => r.key}
+        pagination={false}
+        size="small"
+      />
     </div>
   );
 }

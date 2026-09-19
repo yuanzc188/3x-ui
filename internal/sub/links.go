@@ -16,12 +16,8 @@ func NewLinkProvider() *LinkProvider {
 }
 
 func (p *LinkProvider) build(host string) *SubService {
-	showInfo, _ := p.settingService.GetSubShowInfo()
-	rModel, err := p.settingService.GetRemarkModel()
-	if err != nil {
-		rModel = "-io"
-	}
-	svc := NewSubService(showInfo, rModel)
+	remarkTemplate, _ := p.settingService.GetRemarkTemplate()
+	svc := NewSubService(remarkTemplate)
 	svc.PrepareForRequest(host)
 	return svc
 }
@@ -42,7 +38,21 @@ func (p *LinkProvider) SubLinksForSubId(host, subId string) ([]string, error) {
 func (p *LinkProvider) LinksForClient(host string, inbound *model.Inbound, email string) []string {
 	svc := p.build(host)
 	svc.projectThroughFallbackMaster(inbound)
+	if endpoints := svc.hostEndpoints(inbound, "raw"); len(endpoints) > 0 {
+		if client, ok := svc.clientForLink(inbound, email); ok {
+			return splitLinkLines(svc.linkFromHosts(inbound, client, endpoints))
+		}
+	}
 	return splitLinkLines(svc.GetLink(inbound, email))
+}
+
+func (p *LinkProvider) LinksForInbounds(host string, inbounds []*model.Inbound) []string {
+	svc := p.build(host)
+	var out []string
+	for _, inbound := range inbounds {
+		out = append(out, svc.inboundLinks(inbound)...)
+	}
+	return out
 }
 
 func splitLinkLines(raw string) []string {

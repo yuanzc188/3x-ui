@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -18,20 +19,29 @@ import (
 func (s *InboundService) MigrationRemoveOrphanedTraffics() {
 	db := database.GetDB()
 	query := fmt.Sprintf(
-		"DELETE FROM client_traffics WHERE email NOT IN (SELECT %s %s)",
+		"DELETE FROM client_traffics WHERE email NOT IN (SELECT email FROM clients) AND email NOT IN (SELECT %s %s)",
 		database.JSONFieldText("client.value", "email"),
 		database.JSONClientsFromInbound(),
 	)
-	db.Exec(query)
+	result := db.Exec(query)
+	if result.Error != nil {
+		logger.Warning("MigrationRemoveOrphanedTraffics failed:", result.Error)
+		return
+	}
+	if result.RowsAffected > 0 {
+		logger.Infof("MigrationRemoveOrphanedTraffics: removed %d orphaned client_traffics row(s)", result.RowsAffected)
+	}
 }
 
-func (s *InboundService) MigrationRequirements() {
+func (s *InboundService) MigrationRequirements() (err error) {
 	db := database.GetDB()
 	tx := db.Begin()
-	var err error
 	defer func() {
 		if err == nil {
-			tx.Commit()
+			if commitErr := tx.Commit().Error; commitErr != nil {
+				err = commitErr
+				return
+			}
 			if !database.IsPostgres() {
 				if dbErr := db.Exec(`VACUUM "main"`).Error; dbErr != nil {
 					logger.Warningf("VACUUM failed: %v", dbErr)
@@ -68,8 +78,8 @@ func (s *InboundService) MigrationRequirements() {
 	// SQLite (no PG :: casts).
 	if database.IsPostgres() {
 		// Use DO block so it is idempotent and doesn't fail if already boolean.
-		normalizeBool := func(table, col string) {
-			tx.Exec(fmt.Sprintf(`
+		normalizeBool := func(table, col string) error {
+			return tx.Exec(fmt.Sprintf(`
 				DO $$
 				BEGIN
 					IF EXISTS (
@@ -80,25 +90,24 @@ func (s *InboundService) MigrationRequirements() {
 						ALTER TABLE %s ALTER COLUMN %s
 							TYPE boolean USING (CASE WHEN %s::text IN ('1','true','t','yes') THEN true ELSE false END);
 					END IF;
-				END $$;`, table, col, table, col, col))
+				END $$;`, table, col, table, col, col)).Error
 		}
-		normalizeBool("inbounds", "enable")
-		normalizeBool("client_traffics", "enable")
-		normalizeBool("nodes", "enable")
-		normalizeBool("clients", "enable")
-		normalizeBool("api_tokens", "enabled")
-		normalizeBool("outbound_subscriptions", "enabled")
+		for _, column := range [][2]string{{"inbounds", "enable"}, {"client_traffics", "enable"}, {"nodes", "enable"}, {"clients", "enable"}, {"api_tokens", "enabled"}, {"outbound_subscriptions", "enabled"}} {
+			if err = normalizeBool(column[0], column[1]); err != nil {
+				return
+			}
+		}
 	}
 
 	// Fix inbounds based problems
 	var inbounds []*model.Inbound
 	err = tx.Model(model.Inbound{}).Where("protocol IN (?)", []string{"vmess", "vless", "trojan", "shadowsocks", "hysteria"}).Find(&inbounds).Error
-	if err != nil && err != gorm.ErrRecordNotFound {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return
 	}
 	for inbound_index := range inbounds {
 		settings := map[string]any{}
-		json.Unmarshal([]byte(inbounds[inbound_index].Settings), &settings)
+		_ = json.Unmarshal([]byte(inbounds[inbound_index].Settings), &settings)
 		if raw, exists := settings["clients"]; exists && raw == nil {
 			settings["clients"] = []any{}
 		}
@@ -117,7 +126,7 @@ func (s *InboundService) MigrationRequirements() {
 
 				// Convert string tgId to int64
 				if _, ok := c["tgId"]; ok {
-					var tgId any = c["tgId"]
+					tgId := c["tgId"]
 					if tgIdStr, ok2 := tgId.(string); ok2 {
 						tgIdInt64, err := strconv.ParseInt(strings.ReplaceAll(tgIdStr, " ", ""), 10, 64)
 						if err == nil {
@@ -152,7 +161,8 @@ func (s *InboundService) MigrationRequirements() {
 				delete(settings, "testseed")
 			}
 
-			modifiedSettings, err := json.MarshalIndent(settings, "", "  ")
+			var modifiedSettings []byte
+			modifiedSettings, err = json.MarshalIndent(settings, "", "  ")
 			if err != nil {
 				return
 			}
@@ -161,30 +171,39 @@ func (s *InboundService) MigrationRequirements() {
 		}
 
 		// Add client traffic row for all clients which has email
-		modelClients, err := s.GetClients(inbounds[inbound_index])
+		var modelClients []model.Client
+		modelClients, err = s.GetClients(inbounds[inbound_index])
 		if err != nil {
 			return
 		}
 		for _, modelClient := range modelClients {
 			if len(modelClient.Email) > 0 {
 				var count int64
-				tx.Model(xray.ClientTraffic{}).Where("email = ?", modelClient.Email).Count(&count)
+				if err = tx.Model(xray.ClientTraffic{}).Where("email = ?", modelClient.Email).Count(&count).Error; err != nil {
+					return
+				}
 				if count == 0 {
-					s.AddClientStat(tx, inbounds[inbound_index].Id, &modelClient)
+					if err = s.AddClientStat(tx, inbounds[inbound_index].Id, &modelClient); err != nil {
+						return
+					}
 				}
 			}
 		}
 
 		// Heal clients table for installs where the one-shot seeder
 		// skipped clients due to a tgId-string unmarshal error.
-		if syncErr := s.clientService.SyncInbound(tx, inbounds[inbound_index].Id, modelClients); syncErr != nil {
-			logger.Warning("MigrationRequirements sync clients failed:", syncErr)
+		if err = s.clientService.SyncInbound(tx, inbounds[inbound_index].Id, modelClients); err != nil {
+			return
 		}
 	}
-	tx.Save(inbounds)
+	if err = tx.Save(inbounds).Error; err != nil {
+		return
+	}
 
 	// Remove orphaned traffics
-	tx.Where("inbound_id = 0").Delete(xray.ClientTraffic{})
+	if err = tx.Where("inbound_id = 0").Delete(xray.ClientTraffic{}).Error; err != nil {
+		return
+	}
 
 	// Migrate old MultiDomain to External Proxy
 	var externalProxy []struct {
@@ -212,7 +231,7 @@ func (s *InboundService) MigrationRequirements() {
 	for _, ep := range externalProxy {
 		var reverses any
 		var stream map[string]any
-		json.Unmarshal([]byte(ep.StreamSettings), &stream)
+		_ = json.Unmarshal([]byte(ep.StreamSettings), &stream)
 		if tlsSettings, ok := stream["tlsSettings"].(map[string]any); ok {
 			if settings, ok := tlsSettings["settings"].(map[string]any); ok {
 				if domains, ok := settings["domains"].([]any); ok {
@@ -230,8 +249,14 @@ func (s *InboundService) MigrationRequirements() {
 			}
 		}
 		stream["externalProxy"] = reverses
-		newStream, _ := json.MarshalIndent(stream, " ", "  ")
-		tx.Model(model.Inbound{}).Where("id = ?", ep.Id).Update("stream_settings", newStream)
+		newStream, marshalErr := json.MarshalIndent(stream, " ", "  ")
+		if marshalErr != nil {
+			err = marshalErr
+			return
+		}
+		if err = tx.Model(model.Inbound{}).Where("id = ?", ep.Id).Update("stream_settings", newStream).Error; err != nil {
+			return
+		}
 	}
 
 	// Legacy tag cleanup for old auto-generated tags (e.g. "0.0.0.0:443-...").
@@ -244,13 +269,60 @@ func (s *InboundService) MigrationRequirements() {
 			SET tag = REPLACE(tag, '0.0.0.0:', '')
 			WHERE position('0.0.0.0:' in tag) > 0;`
 	}
-	err = tx.Raw(tagCleanup).Error
+	err = tx.Exec(tagCleanup).Error
 	if err != nil {
 		return
 	}
+	return err
 }
 
 func (s *InboundService) MigrateDB() {
-	s.MigrationRequirements()
+	if err := s.MigrationRequirements(); err != nil {
+		logger.Errorf("MigrationRequirements failed: %v", err)
+	}
 	s.MigrationRemoveOrphanedTraffics()
+	s.MigrationRestoreVisionFlow()
+}
+
+// MigrationRestoreVisionFlow repairs VLESS inbounds whose clients lost their
+// XTLS Vision flow because the inbound was not flow-eligible when the client was
+// written (e.g. an XHTTP inbound whose vlessenc encryption was enabled only
+// later). For each now-eligible inbound it restores flow=xtls-rprx-vision on
+// clients whose intended flow (their flow_override on a sibling inbound) is
+// Vision. Idempotent: once a client carries the flow it is skipped, so this is a
+// no-op on healthy installs and on subsequent boots.
+func (s *InboundService) MigrationRestoreVisionFlow() {
+	db := database.GetDB()
+	var inbounds []*model.Inbound
+	if err := db.Model(&model.Inbound{}).
+		Where("protocol = ?", model.VLESS).
+		Find(&inbounds).Error; err != nil {
+		logger.Warning("MigrationRestoreVisionFlow: load inbounds failed:", err)
+		return
+	}
+	for _, ib := range inbounds {
+		if ib.DisableFlow {
+			continue
+		}
+		restored, changed := s.restoreVisionFlowForEligibleInbound(nil, ib.Settings, ib.StreamSettings, ib.Protocol)
+		if !changed {
+			continue
+		}
+		clients, err := s.GetClients(&model.Inbound{Settings: restored})
+		if err != nil {
+			logger.Warning("MigrationRestoreVisionFlow: parse clients for inbound", ib.Id, "failed:", err)
+			continue
+		}
+		err = db.Transaction(func(tx *gorm.DB) error {
+			if e := tx.Model(&model.Inbound{}).Where("id = ?", ib.Id).Update("settings", restored).Error; e != nil {
+				return e
+			}
+			return s.clientService.SyncInbound(tx, ib.Id, clients)
+		})
+		if err != nil {
+			logger.Warning("MigrationRestoreVisionFlow: update inbound", ib.Id, "failed:", err)
+			continue
+		}
+		logger.Info("MigrationRestoreVisionFlow: restored XTLS Vision flow on inbound", ib.Id)
+	}
 }

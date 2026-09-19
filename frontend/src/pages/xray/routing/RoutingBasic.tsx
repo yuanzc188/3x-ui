@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Alert, Select, Switch } from 'antd';
 
@@ -13,7 +13,13 @@ import {
   directSettings,
   ipv4Settings,
 } from '../basics/constants';
-import { ruleGetter, ruleSetter, syncOutbound } from '../basics/helpers';
+import {
+  getDefaultOutboundTag,
+  ruleGetter,
+  ruleSetter,
+  setDefaultOutboundTag,
+  syncOutbound,
+} from '../basics/helpers';
 
 interface RoutingBasicProps {
   templateSettings: XraySettingsValue | null;
@@ -43,6 +49,14 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
   const ipv4Domains = ruleGetter(templateSettings, 'IPv4', 'domain');
 
   const torrentActive = BITTORRENT_PROTOCOLS.every((p) => blockedProtocols.includes(p));
+  const defaultOutboundTag = getDefaultOutboundTag(templateSettings);
+  const defaultOutboundOptions = useMemo(() => {
+    const tags = new Set<string>(['direct', 'blocked']);
+    for (const o of templateSettings?.outbounds ?? []) {
+      if (o?.tag) tags.add(o.tag);
+    }
+    return [...tags].map((value) => ({ label: value, value }));
+  }, [templateSettings?.outbounds]);
 
   return (
     <>
@@ -54,17 +68,33 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
       />
 
       <SettingListItem
+        title={t('pages.xray.defaultOutbound')}
+        description={t('pages.xray.defaultOutboundDesc')}
+        paddings="small"
+        control={
+          <Select
+            value={defaultOutboundTag}
+            style={{ width: '100%' }}
+            options={defaultOutboundOptions}
+            onChange={(tag) => mutate((tt) => setDefaultOutboundTag(tt, tag))}
+          />
+        }
+      />
+
+      <SettingListItem
         title={t('pages.xray.Torrent')}
         paddings="small"
         control={
           <Switch
             checked={torrentActive}
-            onChange={(checked) => mutate((tt) => {
-              const next = checked
-                ? [...blockedProtocols, ...BITTORRENT_PROTOCOLS]
-                : blockedProtocols.filter((d) => !BITTORRENT_PROTOCOLS.includes(d));
-              ruleSetter(tt, 'blocked', 'protocol', next);
-            })}
+            onChange={(checked) =>
+              mutate((tt) => {
+                const next = checked
+                  ? [...blockedProtocols, ...BITTORRENT_PROTOCOLS]
+                  : blockedProtocols.filter((d) => !BITTORRENT_PROTOCOLS.includes(d));
+                ruleSetter(tt, 'blocked', 'protocol', next);
+              })
+            }
           />
         }
       />
@@ -113,10 +143,12 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
             value={directIPs}
             style={{ width: '100%' }}
             options={IPS_OPTIONS}
-            onChange={(v) => mutate((tt) => {
-              ruleSetter(tt, 'direct', 'ip', v);
-              syncOutbound(tt, 'direct', directSettings);
-            })}
+            onChange={(v) =>
+              mutate((tt) => {
+                ruleSetter(tt, 'direct', 'ip', v);
+                syncOutbound(tt, 'direct', directSettings);
+              })
+            }
           />
         }
       />
@@ -130,10 +162,12 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
             value={directDomains}
             style={{ width: '100%' }}
             options={DOMAINS_OPTIONS}
-            onChange={(v) => mutate((tt) => {
-              ruleSetter(tt, 'direct', 'domain', v);
-              syncOutbound(tt, 'direct', directSettings);
-            })}
+            onChange={(v) =>
+              mutate((tt) => {
+                ruleSetter(tt, 'direct', 'domain', v);
+                syncOutbound(tt, 'direct', directSettings);
+              })
+            }
           />
         }
       />
@@ -148,10 +182,12 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
             value={ipv4Domains}
             style={{ width: '100%' }}
             options={SERVICES_OPTIONS}
-            onChange={(v) => mutate((tt) => {
-              ruleSetter(tt, 'IPv4', 'domain', v);
-              syncOutbound(tt, 'IPv4', ipv4Settings);
-            })}
+            onChange={(v) =>
+              mutate((tt) => {
+                ruleSetter(tt, 'IPv4', 'domain', v);
+                syncOutbound(tt, 'IPv4', ipv4Settings);
+              })
+            }
           />
         }
       />

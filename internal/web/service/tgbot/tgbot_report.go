@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/config"
-	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
+	"github.com/mhsanaei/3x-ui/v3/internal/eventbus"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
@@ -48,10 +48,16 @@ func (t *Tgbot) SendBackupToAdmins() {
 	if !t.IsRunning() {
 		return
 	}
-	for i, adminId := range adminIds {
-		t.sendBackup(int64(adminId))
+	dbData, err := t.serverService.GetDb()
+	if err != nil {
+		logger.Error("Error in getting db backup: ", err)
+	}
+	dbFilename := t.serverService.BackupFilename("")
+	admins := adminSnapshot()
+	for i, adminId := range admins {
+		t.sendBackupData(adminId, dbData, dbFilename)
 		// Add delay between sends to avoid Telegram rate limits
-		if i < len(adminIds)-1 {
+		if i < len(admins)-1 {
 			time.Sleep(1 * time.Second)
 		}
 	}
@@ -62,8 +68,8 @@ func (t *Tgbot) sendExhaustedToAdmins() {
 	if !t.IsRunning() {
 		return
 	}
-	for _, adminId := range adminIds {
-		t.getExhausted(int64(adminId))
+	for _, adminId := range adminSnapshot() {
+		t.getExhausted(adminId)
 	}
 }
 
@@ -105,10 +111,13 @@ func (t *Tgbot) prepareServerUsageInfo() string {
 		t.lastStatus = t.serverService.GetStatus(t.lastStatus)
 		t.setCachedStatus(t.lastStatus)
 	}
-	onlines := service.XrayProcess().GetOnlineClients()
+	var onlines []string
+	if process := service.XrayProcess(); process != nil {
+		onlines = process.GetOnlineClients()
+	}
 
 	info += t.I18nBot("tgbot.messages.hostname", "Hostname=="+hostname)
-	info += t.I18nBot("tgbot.messages.version", "Version=="+config.GetVersion())
+	info += t.I18nBot("tgbot.messages.version", "Version=="+config.GetPanelVersion())
 	info += t.I18nBot("tgbot.messages.xrayVersion", "XrayVersion=="+fmt.Sprint(t.lastStatus.Xray.Version))
 
 	// get ip address
@@ -153,38 +162,33 @@ func (t *Tgbot) prepareServerUsageInfo() string {
 	return info
 }
 
-// UserLoginNotify sends a notification about user login attempts to admins.
+// UserLoginNotify publishes a login event to the event bus.
 func (t *Tgbot) UserLoginNotify(attempt LoginAttempt) {
-	if !t.IsRunning() {
-		return
-	}
-
 	if attempt.Username == "" || attempt.IP == "" || attempt.Time == "" {
 		logger.Warning("UserLoginNotify failed, invalid info!")
 		return
 	}
 
-	loginNotifyEnabled, err := t.settingService.GetTgBotLoginNotify()
-	if err != nil || !loginNotifyEnabled {
+	if EventBus == nil {
 		return
 	}
 
-	msg := ""
-	switch attempt.Status {
-	case LoginSuccess:
-		msg += t.I18nBot("tgbot.messages.loginSuccess")
-		msg += t.I18nBot("tgbot.messages.hostname", "Hostname=="+hostname)
-	case LoginFail:
-		msg += t.I18nBot("tgbot.messages.loginFailed")
-		msg += t.I18nBot("tgbot.messages.hostname", "Hostname=="+hostname)
-		if attempt.Reason != "" {
-			msg += t.I18nBot("tgbot.messages.reason", "Reason=="+attempt.Reason)
-		}
+	status := "fail"
+	if attempt.Status == LoginSuccess {
+		status = "success"
 	}
-	msg += t.I18nBot("tgbot.messages.username", "Username=="+attempt.Username)
-	msg += t.I18nBot("tgbot.messages.ip", "IP=="+attempt.IP)
-	msg += t.I18nBot("tgbot.messages.time", "Time=="+attempt.Time)
-	go t.SendMsgToTgbotAdmins(msg)
+
+	EventBus.Publish(eventbus.Event{
+		Type:   eventbus.EventLoginAttempt,
+		Source: attempt.IP,
+		Data: &eventbus.LoginEventData{
+			Username: attempt.Username,
+			IP:       attempt.IP,
+			Time:     attempt.Time,
+			Status:   status,
+			Reason:   attempt.Reason,
+		},
+	})
 }
 
 // getExhausted retrieves and sends information about exhausted clients.
@@ -210,6 +214,7 @@ func (t *Tgbot) getExhausted(chatId int64) {
 		logger.Warning("Unable to load Inbounds", err)
 	}
 
+	seenClients := make(map[string]bool)
 	for _, inbound := range inbounds {
 		if inbound.Enable {
 			if (inbound.ExpiryTime > 0 && (inbound.ExpiryTime-now < exDiff)) ||
@@ -218,6 +223,10 @@ func (t *Tgbot) getExhausted(chatId int64) {
 			}
 			if len(inbound.ClientStats) > 0 {
 				for _, client := range inbound.ClientStats {
+					if seenClients[client.Email] {
+						continue
+					}
+					seenClients[client.Email] = true
 					if client.Enable {
 						if (client.ExpiryTime > 0 && (client.ExpiryTime-now < exDiff)) ||
 							(client.Total > 0 && (client.Total-(client.Up+client.Down) < trDiff)) {
@@ -361,11 +370,12 @@ func (t *Tgbot) notifyExhausted() {
 
 // onlineClients retrieves and sends information about online clients.
 func (t *Tgbot) onlineClients(chatId int64, messageID ...int) {
-	if !service.XrayProcess().IsRunning() {
+	process := service.XrayProcess()
+	if process == nil || !process.IsRunning() {
 		return
 	}
 
-	onlines := service.XrayProcess().GetOnlineClients()
+	onlines := process.GetOnlineClients()
 	onlinesCount := len(onlines)
 	output := t.I18nBot("tgbot.messages.onlinesCount", "Count=="+fmt.Sprint(onlinesCount))
 	keyboard := tu.InlineKeyboard(tu.InlineKeyboardRow(
@@ -374,7 +384,11 @@ func (t *Tgbot) onlineClients(chatId int64, messageID ...int) {
 	if onlinesCount > 0 {
 		var buttons []telego.InlineKeyboardButton
 		for _, online := range onlines {
-			buttons = append(buttons, tu.InlineKeyboardButton(online).WithCallbackData(t.encodeQuery("client_get_usage "+online)))
+			label := online
+			if _, inbound, err := t.inboundService.GetClientInboundByEmail(online); err == nil && inbound != nil && inbound.Remark != "" {
+				label = online + " - " + inbound.Remark
+			}
+			buttons = append(buttons, tu.InlineKeyboardButton(label).WithCallbackData(t.encodeQuery("client_get_usage "+online)))
 		}
 		cols := 0
 		if onlinesCount < 21 {
@@ -396,28 +410,30 @@ func (t *Tgbot) onlineClients(chatId int64, messageID ...int) {
 
 // sendBackup sends a backup of the database and configuration files.
 func (t *Tgbot) sendBackup(chatId int64) {
-	output := t.I18nBot("tgbot.messages.backupTime", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
+	dbData, err := t.serverService.GetDb()
+	if err != nil {
+		logger.Error("Error in getting db backup: ", err)
+	}
+	t.sendBackupData(chatId, dbData, t.serverService.BackupFilename(""))
+}
+
+func (t *Tgbot) sendBackupData(chatId int64, dbData []byte, dbFilename string) {
+	output := t.I18nBot("tgbot.messages.hostname", "Hostname=="+hostname)
+	output += t.I18nBot("tgbot.messages.backupTime", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
 	t.SendMsgToTgbot(chatId, output)
 
 	// Send database backup (SQLite file, or a pg_dump archive on PostgreSQL)
-	dbData, err := t.serverService.GetDb()
-	if err == nil {
-		dbFilename := "x-ui.db"
-		if database.IsPostgres() {
-			dbFilename = "x-ui.dump"
-		}
+	if dbData != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		document := tu.Document(
 			tu.ID(chatId),
 			tu.FileFromBytes(dbData, dbFilename),
 		)
-		_, err = bot.SendDocument(ctx, document)
+		_, err := bot.SendDocument(ctx, document)
 		cancel()
 		if err != nil {
 			logger.Error("Error in uploading backup: ", err)
 		}
-	} else {
-		logger.Error("Error in getting db backup: ", err)
 	}
 
 	// Small delay between file sends
@@ -445,7 +461,8 @@ func (t *Tgbot) sendBackup(chatId int64) {
 // sendBanLogs sends the ban logs to the specified chat.
 func (t *Tgbot) sendBanLogs(chatId int64, dt bool) {
 	if dt {
-		output := t.I18nBot("tgbot.messages.datetime", "DateTime=="+time.Now().Format("2006-01-02 15:04:05"))
+		output := t.I18nBot("tgbot.messages.hostname", "Hostname=="+hostname)
+		output += t.I18nBot("tgbot.messages.datetime", "DateTime=="+time.Now().Format("2006-01-02 15:04:05"))
 		t.SendMsgToTgbot(chatId, output)
 	}
 

@@ -3,6 +3,7 @@ package sub
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
@@ -51,7 +52,7 @@ func TestGetSubs_DuplicateSettingsClients_Deduped(t *testing.T) {
 		t.Fatalf("seed client_inbound: %v", err)
 	}
 
-	s := NewSubService(false, "-ieo")
+	s := NewSubService("")
 	links, emails, _, _, err := s.GetSubs(subId, "sub.example.com")
 	if err != nil {
 		t.Fatalf("GetSubs: %v", err)
@@ -61,5 +62,52 @@ func TestGetSubs_DuplicateSettingsClients_Deduped(t *testing.T) {
 	}
 	if len(emails) != 1 {
 		t.Fatalf("emails = %d, want 1, got %v", len(emails), emails)
+	}
+	// Identity, not just count: the single surviving link must be for this client.
+	if !strings.Contains(links[0], uuid) {
+		t.Fatalf("surviving link must carry the client uuid %q, got %q", uuid, links[0])
+	}
+}
+
+// TestMatchingClients_DedupsCaseInsensitiveEmail pins the dedup KEY, not just the count.
+// clients.email is unique but case-sensitively so: two rows differing only by email case
+// can coexist (import drift), and dropping strings.ToLower (or keying on another field)
+// would emit both. The first row by id must win, matching the old settings-JSON order.
+func TestMatchingClients_DedupsCaseInsensitiveEmail(t *testing.T) {
+	dbDir := t.TempDir()
+	t.Setenv("XUI_DB_FOLDER", dbDir)
+	if err := database.InitDB(filepath.Join(dbDir, "x-ui.db")); err != nil {
+		t.Fatalf("InitDB: %v", err)
+	}
+	t.Cleanup(func() { _ = database.CloseDB() })
+
+	const subId = "s1"
+	const uuid = "11111111-2222-4333-8444-555555555555"
+	db := database.GetDB()
+	ib := &model.Inbound{Protocol: model.VLESS, Enable: true, Port: 42002, Tag: "dedup-ci", Settings: `{"clients":[]}`}
+	if err := db.Create(ib).Error; err != nil {
+		t.Fatalf("seed inbound: %v", err)
+	}
+	for _, email := range []string{"Dup@Example.com", "dup@example.com"} {
+		c := &model.ClientRecord{Email: email, SubID: subId, UUID: uuid, Enable: true}
+		if err := db.Create(c).Error; err != nil {
+			t.Fatalf("seed client %q: %v", email, err)
+		}
+		if err := db.Create(&model.ClientInbound{ClientId: c.Id, InboundId: ib.Id}).Error; err != nil {
+			t.Fatalf("seed client_inbound %q: %v", email, err)
+		}
+	}
+
+	s := &SubService{}
+	got := s.matchingClients(ib, subId)
+	if len(got) != 1 {
+		t.Fatalf("case-differing duplicate emails must dedup to 1 client, got %d", len(got))
+	}
+	if got[0].Email != "Dup@Example.com" {
+		t.Fatalf("first occurrence must be kept, got %q", got[0].Email)
+	}
+	// A wrong subId must still be excluded (guards the SQL subId filter).
+	if other := s.matchingClients(ib, "nope"); len(other) != 0 {
+		t.Fatalf("non-matching subId must yield 0 clients, got %d", len(other))
 	}
 }

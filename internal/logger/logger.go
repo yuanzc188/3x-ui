@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/mhsanaei/3x-ui/v3/internal/config"
 	"github.com/op/go-logging"
+
+	"github.com/mhsanaei/3x-ui/v3/internal/config"
 
 	"gopkg.in/natefinch/lumberjack.v2"
 )
@@ -28,16 +31,29 @@ const (
 )
 
 var (
-	logger     *logging.Logger
-	fileRotate *lumberjack.Logger // nil when file backend disabled
+	// InitLogger swaps the handle while other goroutines are logging, so it is
+	// published atomically — a plain assignment is an unsafe publication.
+	logger atomic.Pointer[logging.Logger]
 
-	// logBuffer maintains recent log entries in memory for web UI retrieval
-	logBuffer []struct {
+	// fileRotateMu guards fileRotate against a concurrent InitLogger/CloseLogger.
+	fileRotateMu sync.Mutex
+	fileRotate   *lumberjack.Logger // nil when file backend disabled
+
+	// logBuffer maintains recent log entries in memory for web UI retrieval;
+	// logBufferMu guards it — written from many goroutines, read by the web UI.
+	logBufferMu sync.Mutex
+	logBuffer   []struct {
 		time  string
 		level logging.Level
 		log   string
 	}
 )
+
+// A usable default so logging never nil-derefs before InitLogger runs — the
+// "migrate" and "setting" CLI subcommands log without calling it.
+func init() {
+	logger.Store(logging.MustGetLogger("x-ui"))
+}
 
 // InitLogger initializes dual logging backends: console/syslog and file.
 // Console logging uses the specified level, file logging always uses DEBUG level.
@@ -46,11 +62,10 @@ func InitLogger(level logging.Level) {
 	backends := make([]logging.Backend, 0, 2)
 
 	// Console/syslog backend with configurable level
-	if consoleBackend := initDefaultBackend(); consoleBackend != nil {
-		leveledBackend := logging.AddModuleLevel(consoleBackend)
-		leveledBackend.SetLevel(level, "x-ui")
-		backends = append(backends, leveledBackend)
-	}
+	consoleBackend := initDefaultBackend()
+	leveledBackend := logging.AddModuleLevel(consoleBackend)
+	leveledBackend.SetLevel(level, "x-ui")
+	backends = append(backends, leveledBackend)
 
 	// File backend with DEBUG level for comprehensive logging
 	if fileBackend := initFileBackend(); fileBackend != nil {
@@ -61,7 +76,7 @@ func InitLogger(level logging.Level) {
 
 	multiBackend := logging.MultiLogger(backends...)
 	newLogger.SetBackend(multiBackend)
-	logger = newLogger
+	logger.Store(newLogger)
 }
 
 // initDefaultBackend creates the console/syslog logging backend.
@@ -99,7 +114,7 @@ func initFileBackend() logging.Backend {
 	}
 
 	logPath := filepath.Join(logDir, logFileName)
-	fileRotate = &lumberjack.Logger{
+	rotate := &lumberjack.Logger{
 		Filename:   logPath,
 		MaxSize:    maxLogFileMB,
 		MaxBackups: maxLogBackups,
@@ -107,8 +122,11 @@ func initFileBackend() logging.Backend {
 		LocalTime:  true,
 		Compress:   compressRotated,
 	}
+	fileRotateMu.Lock()
+	fileRotate = rotate
+	fileRotateMu.Unlock()
 
-	backend := logging.NewLogBackend(fileRotate, "", 0)
+	backend := logging.NewLogBackend(rotate, "", 0)
 	return logging.NewBackendFormatter(backend, newFormatter(true))
 }
 
@@ -124,6 +142,8 @@ func newFormatter(withTime bool) logging.Formatter {
 // CloseLogger closes the rotating log writer and cleans up resources.
 // Should be called during application shutdown.
 func CloseLogger() {
+	fileRotateMu.Lock()
+	defer fileRotateMu.Unlock()
 	if fileRotate != nil {
 		_ = fileRotate.Close()
 		fileRotate = nil
@@ -132,67 +152,69 @@ func CloseLogger() {
 
 // Debug logs a debug message and adds it to the log buffer.
 func Debug(args ...any) {
-	logger.Debug(args...)
+	logger.Load().Debug(args...)
 	addToBuffer("DEBUG", fmt.Sprint(args...))
 }
 
 // Debugf logs a formatted debug message and adds it to the log buffer.
 func Debugf(format string, args ...any) {
-	logger.Debugf(format, args...)
+	logger.Load().Debugf(format, args...)
 	addToBuffer("DEBUG", fmt.Sprintf(format, args...))
 }
 
 // Info logs an info message and adds it to the log buffer.
 func Info(args ...any) {
-	logger.Info(args...)
+	logger.Load().Info(args...)
 	addToBuffer("INFO", fmt.Sprint(args...))
 }
 
 // Infof logs a formatted info message and adds it to the log buffer.
 func Infof(format string, args ...any) {
-	logger.Infof(format, args...)
+	logger.Load().Infof(format, args...)
 	addToBuffer("INFO", fmt.Sprintf(format, args...))
 }
 
 // Notice logs a notice message and adds it to the log buffer.
 func Notice(args ...any) {
-	logger.Notice(args...)
+	logger.Load().Notice(args...)
 	addToBuffer("NOTICE", fmt.Sprint(args...))
 }
 
 // Noticef logs a formatted notice message and adds it to the log buffer.
 func Noticef(format string, args ...any) {
-	logger.Noticef(format, args...)
+	logger.Load().Noticef(format, args...)
 	addToBuffer("NOTICE", fmt.Sprintf(format, args...))
 }
 
 // Warning logs a warning message and adds it to the log buffer.
 func Warning(args ...any) {
-	logger.Warning(args...)
+	logger.Load().Warning(args...)
 	addToBuffer("WARNING", fmt.Sprint(args...))
 }
 
 // Warningf logs a formatted warning message and adds it to the log buffer.
 func Warningf(format string, args ...any) {
-	logger.Warningf(format, args...)
+	logger.Load().Warningf(format, args...)
 	addToBuffer("WARNING", fmt.Sprintf(format, args...))
 }
 
 // Error logs an error message and adds it to the log buffer.
 func Error(args ...any) {
-	logger.Error(args...)
+	logger.Load().Error(args...)
 	addToBuffer("ERROR", fmt.Sprint(args...))
 }
 
 // Errorf logs a formatted error message and adds it to the log buffer.
 func Errorf(format string, args ...any) {
-	logger.Errorf(format, args...)
+	logger.Load().Errorf(format, args...)
 	addToBuffer("ERROR", fmt.Sprintf(format, args...))
 }
 
 // addToBuffer adds a log entry to the in-memory ring buffer for web UI retrieval.
 func addToBuffer(level string, newLog string) {
 	t := time.Now()
+	logBufferMu.Lock()
+	defer logBufferMu.Unlock()
 	if len(logBuffer) >= maxLogBufferSize {
 		logBuffer = logBuffer[1:]
 	}
@@ -214,9 +236,21 @@ func GetLogs(c int, level string) []string {
 	var output []string
 	logLevel, _ := logging.LogLevel(level)
 
-	for i := len(logBuffer) - 1; i >= 0 && len(output) <= c; i-- {
-		if logBuffer[i].level <= logLevel {
-			output = append(output, fmt.Sprintf("%s %s - %s", logBuffer[i].time, logBuffer[i].level, logBuffer[i].log))
+	// Snapshot (copy) under the lock, then filter/format unlocked: a UI log fetch
+	// must not block addToBuffer — and thus all logging — for the formatting loop.
+	// A copy (not a reslice) is required, since addToBuffer can append in place.
+	logBufferMu.Lock()
+	snapshot := make([]struct {
+		time  string
+		level logging.Level
+		log   string
+	}, len(logBuffer))
+	copy(snapshot, logBuffer)
+	logBufferMu.Unlock()
+
+	for i := len(snapshot) - 1; i >= 0 && len(output) < c; i-- {
+		if snapshot[i].level <= logLevel {
+			output = append(output, fmt.Sprintf("%s %s - %s", snapshot[i].time, snapshot[i].level, snapshot[i].log))
 		}
 	}
 	return output

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
@@ -49,6 +50,44 @@ func (s *ClientService) EffectiveFlow(tx *gorm.DB, recordId int) (string, error)
 	return flows[0], nil
 }
 
+// EffectiveFlowsByEmails resolves the intended flow (non-empty flow_override,
+// lowest inbound_id first — same rule as EffectiveFlow) for many clients in one
+// query, keyed by email. Emails absent from the result carry no flow anywhere.
+// Batched so flow restoration on an inbound with many clients is O(1) queries
+// instead of O(clients). Used to restore a stripped flow onto an inbound that
+// has just become flow-eligible.
+func (s *ClientService) EffectiveFlowsByEmails(tx *gorm.DB, emails []string) (map[string]string, error) {
+	if tx == nil {
+		tx = database.GetDB()
+	}
+	out := make(map[string]string, len(emails))
+	if len(emails) == 0 {
+		return out, nil
+	}
+	type row struct {
+		Email string
+		Flow  string `gorm:"column:flow_override"`
+	}
+	for _, batch := range chunkStrings(emails, sqlInChunk) {
+		var rows []row
+		err := tx.Table("client_inbounds").
+			Select("clients.email AS email, client_inbounds.flow_override AS flow_override").
+			Joins("JOIN clients ON clients.id = client_inbounds.client_id").
+			Where("clients.email IN ? AND client_inbounds.flow_override <> ?", batch, "").
+			Order("client_inbounds.inbound_id ASC").
+			Scan(&rows).Error
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			if _, seen := out[r.Email]; !seen { // ordered by inbound_id ASC → first = lowest
+				out[r.Email] = r.Flow
+			}
+		}
+	}
+	return out, nil
+}
+
 func (s *ClientService) GetInboundIdsForEmail(tx *gorm.DB, email string) ([]int, error) {
 	if tx == nil {
 		tx = database.GetDB()
@@ -63,6 +102,15 @@ func (s *ClientService) GetInboundIdsForEmail(tx *gorm.DB, email string) ([]int,
 		return nil, err
 	}
 	return ids, nil
+}
+
+func (s *ClientService) GetRecordsByTgID(tgId int64) ([]*model.ClientRecord, error) {
+	if tgId <= 0 {
+		return nil, errors.New("tg_id must be a positive integer")
+	}
+	var rows []*model.ClientRecord
+	err := database.GetDB().Where("tg_id = ?", tgId).Find(&rows).Error
+	return rows, err
 }
 
 func (s *ClientService) GetByID(id int) (*model.ClientRecord, error) {
@@ -83,6 +131,41 @@ func (s *ClientService) GetInboundIdsForRecord(id int) ([]int, error) {
 		return nil, err
 	}
 	return ids, nil
+}
+
+// TunnelAllowedIPsByInbound returns, for each given WireGuard/AmneziaWG
+// inbound id, the real AllowedIPs this email currently has on that specific
+// inbound's own settings JSON -- joined comma-separated, matching the form
+// value shape a single AllowedIPs field already uses. Non-tunnel inbounds
+// and ids the email isn't actually attached to are simply absent from the
+// result (not an error): callers use this to seed a per-protocol display
+// field, and ClientRecord's own single AllowedIPs column can't tell two
+// different protocol addresses apart, which is exactly the gap this closes.
+func (s *ClientService) TunnelAllowedIPsByInbound(inboundSvc *InboundService, email string, inboundIds []int) (map[int]string, error) {
+	result := make(map[int]string, len(inboundIds))
+	for _, ibId := range inboundIds {
+		inbound, err := inboundSvc.GetInbound(ibId)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		if inbound.Protocol != model.WireGuard && inbound.Protocol != model.AmneziaWG {
+			continue
+		}
+		clients, err := inboundSvc.GetClients(inbound)
+		if err != nil {
+			return nil, err
+		}
+		for i := range clients {
+			if strings.EqualFold(clients[i].Email, email) {
+				result[ibId] = strings.Join(clients[i].AllowedIPs, ",")
+				break
+			}
+		}
+	}
+	return result, nil
 }
 
 func (s *ClientService) List() ([]ClientWithAttachments, error) {
@@ -186,4 +269,26 @@ func (s *ClientService) findInboundIdsByClientEmail(email string) ([]int, error)
 		}
 	}
 	return out, nil
+}
+
+// clientRecordsByEmail batch-loads client rows for emails, keyed by email.
+// Callers pass an already-deduplicated list; absent addresses are simply
+// missing from the map.
+func clientRecordsByEmail(tx *gorm.DB, emails []string) (map[string]*model.ClientRecord, error) {
+	if tx == nil {
+		tx = database.GetDB()
+	}
+	var records []model.ClientRecord
+	for _, batch := range chunkStrings(emails, sqlInChunk) {
+		var rows []model.ClientRecord
+		if err := tx.Where("email IN ?", batch).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		records = append(records, rows...)
+	}
+	byEmail := make(map[string]*model.ClientRecord, len(records))
+	for i := range records {
+		byEmail[records[i].Email] = &records[i]
+	}
+	return byEmail, nil
 }
