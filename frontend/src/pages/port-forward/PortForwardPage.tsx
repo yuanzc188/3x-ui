@@ -1,20 +1,23 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Card, ConfigProvider, Layout, Space } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { PlusOutlined, SettingOutlined } from '@ant-design/icons';
 
 import { useTheme } from '@/hooks/useTheme';
 import AppSidebar from '@/layouts/AppSidebar';
 import { usePortForward } from './usePortForward';
 import ForwardList from './list/ForwardList';
 import ForwardFormModal from './form/ForwardFormModal';
+import ForwardSettingsModal from './form/ForwardSettingsModal';
 import type { ForwardRule } from './types';
 
 export default function PortForwardPage() {
   const { t } = useTranslation();
   const { isDark, isUltra, antdThemeConfig } = useTheme();
-  const { rules, loading, save, remove, setEnable } = usePortForward();
+  const { rules, loading, settings, save, remove, setEnable, checkNow, saveSettings } =
+    usePortForward();
   const [modalOpen, setModalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [editing, setEditing] = useState<ForwardRule | null>(null);
 
   const pageClass = useMemo(() => {
@@ -24,8 +27,14 @@ export default function PortForwardPage() {
     return classes.join(' ');
   }, [isDark, isUltra]);
 
-  const openAdd = () => { setEditing(null); setModalOpen(true); };
-  const openEdit = (rule: ForwardRule) => { setEditing(rule); setModalOpen(true); };
+  const openAdd = () => {
+    setEditing(null);
+    setModalOpen(true);
+  };
+  const openEdit = (rule: ForwardRule) => {
+    setEditing(rule);
+    setModalOpen(true);
+  };
 
   return (
     <ConfigProvider theme={antdThemeConfig}>
@@ -38,6 +47,9 @@ export default function PortForwardPage() {
               title={t('pages.portForward.title')}
               extra={
                 <Space>
+                  <Button icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)}>
+                    {t('pages.portForward.settings')}
+                  </Button>
                   <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
                     {t('pages.portForward.addRule')}
                   </Button>
@@ -50,6 +62,7 @@ export default function PortForwardPage() {
                 onEdit={openEdit}
                 onDelete={(id) => remove(id)}
                 onToggle={(id, enable) => setEnable(id, enable)}
+                onCheck={checkNow}
               />
               <ForwardFormModal
                 open={modalOpen}
@@ -57,6 +70,12 @@ export default function PortForwardPage() {
                 rules={rules}
                 onCancel={() => setModalOpen(false)}
                 onSave={save}
+              />
+              <ForwardSettingsModal
+                open={settingsOpen}
+                settings={settings}
+                onCancel={() => setSettingsOpen(false)}
+                onSave={saveSettings}
               />
             </Card>
           </Layout.Content>
