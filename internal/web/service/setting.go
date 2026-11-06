@@ -87,7 +87,7 @@ var defaultValueMap = map[string]string{
 	"subCalendarExpireInclusive":  "false",
 	"subExpiredTemplate":          DefaultSubExpiredTemplate,
 	"subTrafficDepletedTemplate":  DefaultSubTrafficDepletedTemplate,
-	"timeLocation":                "Local",
+	"timeLocation":                "Asia/Shanghai",
 	"tgBotEnable":                 "false",
 	"tgBotToken":                  "",
 	"tgBotProxy":                  "",

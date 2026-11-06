@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	_ "time/tzdata" // the default Asia/Shanghai must load where the OS has no zoneinfo (Windows)
 	_ "unsafe"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/config"

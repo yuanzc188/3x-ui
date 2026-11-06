@@ -138,7 +138,7 @@ export class AllSetting {
   subIncyResolveDnsDomain = '';
   subIncyResolveDnsIp = '';
 
-  timeLocation = 'Local';
+  timeLocation = 'Asia/Shanghai';
 
   ldapEnable = false;
   ldapHost = '';
