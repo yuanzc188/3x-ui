@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,8 +63,12 @@ func probeProxy(r model.ForwardRule, checkURL string) (ip, geo string, ms int, e
 			DisableKeepAlives: true,
 		},
 	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, checkURL, nil)
+	if err != nil {
+		return "", "", 0, err
+	}
 	start := time.Now()
-	resp, err := client.Get(checkURL)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", 0, err
 	}
