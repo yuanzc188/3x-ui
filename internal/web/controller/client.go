@@ -3,11 +3,13 @@ package controller
 import (
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
+	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/entity"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/websocket"
@@ -91,6 +93,7 @@ func (a *ClientController) initRouter(g *gin.RouterGroup) {
 	g.POST("/clearIps/:email", a.clearIps)
 	g.POST("/hwids/:email", a.getHwids)
 	g.GET("/usageLog/:email", a.getUsageLog)
+	g.GET("/usageLog/:email/download", a.downloadUsageLog)
 	g.DELETE("/hwids/:email", a.clearHwids)
 	g.DELETE("/hwids/:email/:id", a.deleteHwid)
 	g.POST("/onlines", a.onlines)
@@ -637,6 +640,23 @@ func (a *ClientController) getUsageLog(c *gin.Context) {
 		return
 	}
 	jsonObj(c, day, nil)
+}
+
+// downloadUsageLog streams one client's whole day as a file; the list above is capped.
+func (a *ClientController) downloadUsageLog(c *gin.Context) {
+	email := c.Param("email")
+	export, day, err := a.usageService.Export(email, c.Query("day"), c.Query("filter"))
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.clients.usageLog"), err)
+		return
+	}
+	defer export.Close()
+	name := "usage_" + email + "_" + day + ".log"
+	c.Header("Content-Type", "application/octet-stream")
+	c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
+	if err := export.Stream(c.Writer); err != nil {
+		logger.Warning("usage log download of", email, "cut short:", err)
+	}
 }
 
 func (a *ClientController) clientIpsByGuid(c *gin.Context) {

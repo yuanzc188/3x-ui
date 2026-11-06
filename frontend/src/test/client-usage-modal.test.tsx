@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import ClientUsageModal from '@/pages/clients/ClientUsageModal';
 import type { UsageLogDay } from '@/generated/types';
@@ -66,11 +66,53 @@ describe('ClientUsageModal', () => {
     );
   });
 
+  it('downloads the whole day shown, with the current filter, from the server', async () => {
+    serve({
+      day: '2026-11-06',
+      enabled: true,
+      retentionDays: 30,
+      truncated: true,
+      entries: [
+        {
+          time: 1793944860000,
+          destination: 'www.tiktok.com:443',
+          outbound: 'fwd-1',
+          blocked: false,
+        },
+      ],
+    });
+    const clicked: { href: string | null; download: string | null }[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push({ href: this.getAttribute('href'), download: this.getAttribute('download') });
+    });
+    onTestFinished(() => click.mockRestore());
+    renderWithProviders(<ClientUsageModal open email="shop a@x" onOpenChange={() => {}} />);
+
+    await screen.findByText('www.tiktok.com:443');
+    fireEvent.change(screen.getByPlaceholderText('Filter by domain'), {
+      target: { value: 'tiktok' },
+    });
+    fireEvent.keyDown(screen.getByPlaceholderText('Filter by domain'), { key: 'Enter' });
+    const button = screen.getByRole('button', { name: 'Download' });
+    await waitFor(() => expect(button).toHaveProperty('disabled', false));
+    fireEvent.click(button);
+
+    expect(clicked).toEqual([
+      {
+        href: '/panel/api/clients/usageLog/shop%20a%40x/download?day=2026-11-06&filter=tiktok',
+        download: '',
+      },
+    ]);
+  });
+
   it('warns when the access log is off and when the list was cut short', async () => {
     serve({ day: '2026-11-06', enabled: false, retentionDays: 30, truncated: true, entries: [] });
     renderWithProviders(<ClientUsageModal open email="alice" onOpenChange={() => {}} />);
 
     expect(await screen.findByText(/Xray access log is off/)).toBeTruthy();
     expect(screen.getByText(/Showing the newest 0 entries/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Download' })).toHaveProperty('disabled', true);
   });
 });

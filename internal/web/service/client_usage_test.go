@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -173,6 +174,67 @@ func TestReadUsageDay_NewestFirstFilteredAndCapped(t *testing.T) {
 			got, truncated, err := readUsageDay(dir, day, tc.email, tc.filter, map[string]bool{"forward-block": true})
 			if err != nil || truncated != tc.truncated || !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("got %+v truncated=%v err=%v, want %+v truncated=%v", got, truncated, err, tc.want, tc.truncated)
+			}
+		})
+	}
+}
+
+// The download is the whole day: neither the screen's cap nor its newest-first order,
+// and times are the panel's zone, not the server's.
+func TestUsageExport_WholeDayOldestFirstInPanelZone(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 6, 0, 5, 9, 0, loc)
+	day := at.Format(usageDayLayout)
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, day), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stored := []string{
+		rec(at, "www.tiktok.com:443", "fwd-1"),
+		rec(at.Add(time.Minute), "udp:8.8.8.8:53", "forward-block"),
+		rec(at.Add(2*time.Minute), "v16.TikTokCDN.com:443", "fwd-1"),
+		"not a record",
+	}
+	if err := os.WriteFile(filepath.Join(dir, day, usageFileName("alice")), []byte(strings.Join(stored, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defaultMax := maxUsageEntries
+	maxUsageEntries = 1
+	t.Cleanup(func() { maxUsageEntries = defaultMax })
+
+	header := "time (Asia/Shanghai)\tdestination\troute"
+	for _, tc := range []struct {
+		name, email, filter string
+		want                []string
+	}{
+		{"whole day, blackholes as BLOCKED", "alice", "", []string{
+			header,
+			"2026-11-06 00:05:09\twww.tiktok.com:443\tfwd-1",
+			"2026-11-06 00:06:09\tudp:8.8.8.8:53\tBLOCKED",
+			"2026-11-06 00:07:09\tv16.TikTokCDN.com:443\tfwd-1",
+		}},
+		{"filter ignores case", "alice", "TIKTOK", []string{
+			header,
+			"2026-11-06 00:05:09\twww.tiktok.com:443\tfwd-1",
+			"2026-11-06 00:07:09\tv16.TikTokCDN.com:443\tfwd-1",
+		}},
+		{"client without records", "nobody", "", []string{header}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			export, err := openUsageExport(dir, day, tc.email, tc.filter, loc, map[string]bool{"forward-block": true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer export.Close()
+			var buf bytes.Buffer
+			if err := export.Stream(&buf); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n"); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("export =\n%q\nwant\n%q", got, tc.want)
 			}
 		})
 	}

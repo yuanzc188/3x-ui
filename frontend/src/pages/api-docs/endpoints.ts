@@ -1700,6 +1700,29 @@ export const sections: readonly Section[] = [
         responseSchema: 'UsageLogDay',
       },
       {
+        method: 'GET',
+        path: '/panel/api/clients/usageLog/:email/download',
+        summary:
+          'Stream the client\u2019s whole day as an attachment (usage_<email>_<day>.log), oldest first and without the 5000-entry cap: a header row, then one "time<TAB>destination<TAB>route" line per record, time in the panel time zone, route BLOCKED for a blackhole. An invalid day returns the JSON error envelope instead of a file.',
+        params: [
+          { name: 'email', in: 'path', type: 'string', desc: 'Client email.' },
+          {
+            name: 'day',
+            in: 'query',
+            type: 'string',
+            desc: 'Day as YYYY-MM-DD in the panel time zone. Defaults to today.',
+            optional: true,
+          },
+          {
+            name: 'filter',
+            in: 'query',
+            type: 'string',
+            desc: 'Case-insensitive substring match on the destination.',
+            optional: true,
+          },
+        ],
+      },
+      {
         method: 'POST',
         path: '/panel/api/clients/clearIps/:email',
         summary: 'Reset the recorded IP list for a client.',

@@ -1,9 +1,12 @@
 package service
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -71,6 +74,73 @@ func (s *ClientUsageService) Day(email, day, filter string) (*UsageLogDay, error
 	}, nil
 }
 
+// UsageExport streams one client's whole day, oldest first, as a download. Unlike the
+// on-screen list it has no cap and is read line by line, so a busy day costs no memory.
+type UsageExport struct {
+	file    *os.File
+	loc     *time.Location
+	match   func(dest string) bool
+	blocked map[string]bool
+}
+
+// Export opens email's records of day (empty = today) for Stream; the caller must Close.
+func (s *ClientUsageService) Export(email, day, filter string) (*UsageExport, string, error) {
+	loc := usageLocation()
+	resolved, err := resolveUsageDay(day, time.Now().In(loc))
+	if err != nil {
+		return nil, "", err
+	}
+	export, err := openUsageExport(usageLogDir(), resolved, email, filter, loc, s.blockedTags())
+	return export, resolved, err
+}
+
+func openUsageExport(dir, day, email, filter string, loc *time.Location, blocked map[string]bool) (*UsageExport, error) {
+	f, err := os.Open(filepath.Join(dir, day, usageFileName(email)))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return &UsageExport{file: f, loc: loc, match: usageMatcher(filter), blocked: blocked}, nil
+}
+
+func (e *UsageExport) Close() error {
+	if e.file == nil {
+		return nil
+	}
+	return e.file.Close()
+}
+
+// Stream writes a header row, then "<time>\t<destination>\t<route>" per record.
+func (e *UsageExport) Stream(w io.Writer) error {
+	out := bufio.NewWriter(w)
+	_, _ = fmt.Fprintf(out, "time (%s)\tdestination\troute\n", e.loc)
+	if e.file == nil {
+		return out.Flush()
+	}
+	sc := bufio.NewScanner(e.file)
+	for sc.Scan() {
+		entry, ok := parseUsageRecord(sc.Text())
+		if !ok || !e.match(entry.Destination) {
+			continue
+		}
+		route := entry.Outbound
+		if e.blocked[route] {
+			route = "BLOCKED"
+		}
+		at := time.UnixMilli(entry.Time).In(e.loc).Format(time.DateTime)
+		_, _ = fmt.Fprintf(out, "%s\t%s\t%s\n", at, entry.Destination, route)
+	}
+	if err := sc.Err(); err != nil {
+		return err
+	}
+	return out.Flush()
+}
+
+// usageMatcher is the destination filter shared by the list and the download.
+func usageMatcher(filter string) func(dest string) bool {
+	filter = strings.ToLower(strings.TrimSpace(filter))
+	return func(dest string) bool { return filter == "" || strings.Contains(strings.ToLower(dest), filter) }
+}
+
 func (s *ClientUsageService) blockedTags() map[string]bool {
 	_, blackholes := s.serverService.GetDefaultLogOutboundTags()
 	tags := map[string]bool{forwardBlockTag: true}
@@ -127,12 +197,12 @@ func readUsageDay(dir, day, email, filter string, blocked map[string]bool) ([]Us
 	if err != nil {
 		return nil, false, err
 	}
-	filter = strings.ToLower(strings.TrimSpace(filter))
+	match := usageMatcher(filter)
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 	entries := make([]UsageLogEntry, 0, min(len(lines), maxUsageEntries))
 	for i := len(lines) - 1; i >= 0; i-- {
 		entry, ok := parseUsageRecord(lines[i])
-		if !ok || (filter != "" && !strings.Contains(strings.ToLower(entry.Destination), filter)) {
+		if !ok || !match(entry.Destination) {
 			continue
 		}
 		if len(entries) == maxUsageEntries {

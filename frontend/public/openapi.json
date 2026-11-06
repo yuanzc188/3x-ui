@@ -11055,6 +11055,65 @@
         }
       }
     },
+    "/panel/api/clients/usageLog/{email}/download": {
+      "get": {
+        "tags": [
+          "Clients"
+        ],
+        "summary": "Stream the client’s whole day as an attachment (usage_<email>_<day>.log), oldest first and without the 5000-entry cap: a header row, then one \"time<TAB>destination<TAB>route\" line per record, time in the panel time zone, route BLOCKED for a blackhole. An invalid day returns the JSON error envelope instead of a file.",
+        "operationId": "get_panel_api_clients_usageLog_email_download",
+        "parameters": [
+          {
+            "name": "email",
+            "in": "path",
+            "required": true,
+            "description": "Client email.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "day",
+            "in": "query",
+            "required": false,
+            "description": "Day as YYYY-MM-DD in the panel time zone. Defaults to today.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive substring match on the destination.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "msg": {
+                      "type": "string"
+                    },
+                    "obj": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/panel/api/clients/clearIps/{email}": {
       "post": {
         "tags": [
