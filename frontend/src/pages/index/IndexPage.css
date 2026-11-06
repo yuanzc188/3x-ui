@@ -84,8 +84,7 @@
   }
 }
 
-.ov-state-version,
-.ov-panel-version {
+.ov-state-version {
   padding: 0;
   border: 0;
   background: transparent;
@@ -96,20 +95,13 @@
 }
 
 .ov-state-version:hover,
-.ov-state-version:focus-visible,
-.ov-panel-version:hover,
-.ov-panel-version:focus-visible {
+.ov-state-version:focus-visible {
   color: var(--ant-color-primary);
 }
 
 .ov-panel-version {
   font-size: 12px;
   color: var(--ov-faint);
-}
-
-.ov-update-tag {
-  cursor: pointer;
-  margin-inline-end: 0;
 }
 
 .ov-error-detail {

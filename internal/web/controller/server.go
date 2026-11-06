@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mhsanaei/3x-ui/v3/internal/config"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/netsafe"
-	"github.com/mhsanaei/3x-ui/v3/internal/web/entity"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/global"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service/panel"
@@ -193,15 +193,12 @@ func (a *ServerController) getXrayVersion(c *gin.Context) {
 	jsonObj(c, versions, nil)
 }
 
-// getPanelUpdateInfo retrieves the current and latest panel version.
+// errForkSelfUpdate: the stock updater installs upstream's release over this fork.
+var errForkSelfUpdate = errors.New("self-update is disabled in this fork; re-run deploy/fork-install.sh to update")
+
+// getPanelUpdateInfo never reports an update: there is no updater to offer one.
 func (a *ServerController) getPanelUpdateInfo(c *gin.Context) {
-	info, err := a.panelService.GetUpdateInfo()
-	if err != nil {
-		logger.Debug("panel update check failed:", err)
-		c.JSON(http.StatusOK, entity.Msg{Success: false})
-		return
-	}
-	jsonObj(c, info, nil)
+	jsonObj(c, &panel.PanelUpdateInfo{Channel: "stable", CurrentVersion: config.GetBaseVersion()}, nil)
 }
 
 // installXray installs or updates Xray to the specified version.
@@ -211,29 +208,9 @@ func (a *ServerController) installXray(c *gin.Context) {
 	jsonMsg(c, I18nWeb(c, "pages.index.xraySwitchVersionPopover"), err)
 }
 
-// updatePanel starts a panel self-update. With no "dev" form value it follows
-// this panel's own channel setting; an explicit "dev" (sent by the master node
-// updater) overrides it for this run. The response's runId identifies this
-// update for a later getUpdateStatus poll.
+// updatePanel refuses: also reached by a master panel's node updater.
 func (a *ServerController) updatePanel(c *gin.Context) {
-	devParam := c.PostForm("dev")
-	var runID int64
-	var err error
-	if devParam == "" {
-		runID, err = a.panelService.StartUpdate()
-	} else {
-		dev, perr := strconv.ParseBool(devParam)
-		if perr != nil {
-			jsonMsg(c, "invalid data", perr)
-			return
-		}
-		runID, err = a.panelService.StartUpdateChannel(dev)
-	}
-	var obj any
-	if err == nil {
-		obj = gin.H{"runId": strconv.FormatInt(runID, 10)}
-	}
-	jsonMsgObj(c, I18nWeb(c, "pages.index.panelUpdateStartedPopover"), obj, err)
+	jsonMsg(c, I18nWeb(c, "pages.index.updatePanel"), errForkSelfUpdate)
 }
 
 // getUpdateStatus reports the outcome of the most recently launched panel

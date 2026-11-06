@@ -35,7 +35,6 @@ import NodeList from './NodeList';
 import NodeFormModal from './NodeFormModal';
 import { setMessageInstance } from '@/utils/messageBus';
 import { HttpUtil } from '@/utils';
-import type { PanelUpdateInfo } from '../index/PanelUpdateModal';
 
 // Confirm-dialog body that lets the operator pick the stable or dev channel for
 // a node panel update. Reports changes via onChange so the imperative
@@ -93,7 +92,9 @@ export default function NodesPage() {
   const { data: latestVersion = '' } = useQuery({
     queryKey: ['server', 'panelUpdateInfo'],
     queryFn: async () => {
-      const msg = await HttpUtil.get<PanelUpdateInfo>('/panel/api/server/getPanelUpdateInfo');
+      const msg = await HttpUtil.get<{ latestVersion?: string }>(
+        '/panel/api/server/getPanelUpdateInfo',
+      );
       return msg?.obj?.latestVersion || '';
     },
     staleTime: 5 * 60 * 1000,
