@@ -3,8 +3,9 @@ package service
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/mhsanaei/3x-ui/v3/internal/database"
+	"github.com/mhsanaei/3x-ui/v3/internal/database/dbtest"
 )
 
 // A panel restarts with an empty snapshot until the @2s ticker fires, and a
@@ -12,12 +13,11 @@ import (
 func TestCurrentStatusSamplesBeforeFirstTick(t *testing.T) {
 	dbDir := t.TempDir()
 	t.Setenv("XUI_DB_FOLDER", dbDir)
-	if err := database.InitDB(filepath.Join(dbDir, "x-ui.db")); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	dbtest.InitDB(t, filepath.Join(dbDir, "x-ui.db"))
 
-	svc := &ServerService{}
+	// A settled IP cache keeps GetStatus from starting a public-IP resolver that
+	// outlives this test and races http.DefaultTransport in later ones.
+	svc := &ServerService{cachedIPv4: "192.0.2.1", cachedIPv6: "N/A", nextIPv4Lookup: time.Now().Add(time.Hour), nextIPv6Lookup: time.Now().Add(time.Hour)}
 	if svc.LastStatus() != nil {
 		t.Fatal("a fresh ServerService should hold no snapshot yet")
 	}

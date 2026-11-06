@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
+	"github.com/mhsanaei/3x-ui/v3/internal/database/dbtest"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 )
 
@@ -27,10 +28,7 @@ func initHwidSubRouter(t *testing.T, limit int) (*gin.Engine, string) {
 	}
 
 	t.Setenv("XUI_DB_FOLDER", tmp)
-	if err := database.InitDB(filepath.Join(tmp, "x-ui.db")); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	dbtest.InitDB(t, filepath.Join(tmp, "x-ui.db"))
 
 	const subID = "sub-hwid-route"
 	const email = "route@example.com"
@@ -217,6 +215,27 @@ func TestSubscriptionHwidStatusDoesNotRegisterDevice(t *testing.T) {
 	}
 	if rec := requestSub(t, router, http.MethodGet, "/sub/"+subID, "device-probe", ""); rec.Code != http.StatusOK {
 		t.Fatalf("subscription fetch after probe = %d, want 200", rec.Code)
+	}
+}
+
+// A 404 for a subId nobody was issued must not persist anything: the gate runs
+// before the lookup, and an attacker can send any number of distinct subIds.
+func TestSubscriptionHwidGateIgnoresUnknownSubID(t *testing.T) {
+	router, _ := initHwidSubRouter(t, 0)
+
+	for _, path := range []string{"/sub/never-issued", "/json/never-issued", "/clash/never-issued"} {
+		rec := requestSub(t, router, http.MethodGet, path, "device-ghost", "")
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s unknown subId status = %d, want 404", path, rec.Code)
+		}
+	}
+
+	var count int64
+	if err := database.GetDB().Model(&model.ClientHwid{}).Where("sub_id = ?", "never-issued").Count(&count).Error; err != nil {
+		t.Fatalf("count hwids: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("client_hwids rows for an unknown subId = %d, want 0", count)
 	}
 }
 

@@ -228,6 +228,21 @@ describe('formValuesToWirePayload', () => {
     expect(payload.sniffing).toBe('');
   });
 
+  // xray-core 26.10.31 (#7295): the XHTTP server reads h2Params; the form must not strip it.
+  it('keeps an XHTTP inbound h2Params set through JSON', () => {
+    const h2Params = { MaxConcurrentStreams: 512, MaxReadFrameSize: 1048576 };
+    const values = rawInboundToFormValues({
+      ...vlessRow,
+      streamSettings: {
+        network: 'xhttp',
+        security: 'none',
+        xhttpSettings: { path: '/x', mode: 'auto', h2Params },
+      },
+    });
+    const payload = formValuesToWirePayload(values);
+    expect(JSON.parse(payload.streamSettings).xhttpSettings.h2Params).toEqual(h2Params);
+  });
+
   it('omits nodeId when null', () => {
     const values = rawInboundToFormValues({ ...vlessRow, nodeId: null });
     const payload = formValuesToWirePayload(values);
@@ -291,6 +306,35 @@ describe('formValuesToWirePayload', () => {
     expect(
       rawInboundToFormValues({ ...vlessRow, trafficResetDay: undefined }).trafficResetDay,
     ).toBe(1);
+  });
+});
+
+describe('excludeFromSub', () => {
+  it('DBInbound constructor preserves excludeFromSub from the API row', () => {
+    expect(new DBInbound({ excludeFromSub: true }).excludeFromSub).toBe(true);
+    expect(new DBInbound({ excludeFromSub: false }).excludeFromSub).toBe(false);
+  });
+
+  it('DBInbound defaults excludeFromSub to false when the API omits it', () => {
+    expect(new DBInbound({ protocol: 'vless' }).excludeFromSub).toBe(false);
+    expect(new DBInbound().excludeFromSub).toBe(false);
+  });
+
+  it('rawInboundToFormValues reads excludeFromSub and defaults to false', () => {
+    expect(rawInboundToFormValues({ ...vlessRow, excludeFromSub: true }).excludeFromSub).toBe(true);
+    expect(rawInboundToFormValues(vlessRow).excludeFromSub).toBe(false);
+  });
+
+  it('formValuesToWirePayload includes excludeFromSub', () => {
+    const values = rawInboundToFormValues({ ...vlessRow, excludeFromSub: true });
+    expect(formValuesToWirePayload(values).excludeFromSub).toBe(true);
+  });
+
+  it('excludeFromSub survives raw → DBInbound → values → payload (the edit round-trip)', () => {
+    const db = new DBInbound({ ...vlessRow, excludeFromSub: true } as unknown as DBInboundInit);
+    const values = rawInboundToFormValues(db as unknown as RawInboundRow);
+    const payload = formValuesToWirePayload(values);
+    expect(payload.excludeFromSub).toBe(true);
   });
 });
 

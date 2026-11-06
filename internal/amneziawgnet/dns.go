@@ -71,26 +71,49 @@ var tunnelDNSCache = struct {
 const (
 	tunnelDNSCacheTTL     = 60 * time.Second
 	tunnelDNSCacheMaxSize = 1024
+	tunnelDNSMaxInFlight  = 1024
 )
+
+// tunnelDNSSlots caps lookups in flight across all outbounds: each one holds a
+// netstack port until the resolver answers or the lookup times out.
+var tunnelDNSSlots = make(chan struct{}, tunnelDNSMaxInFlight)
 
 // dnsCacheKey computes cache key scoped by outbound tag, server, and host.
 func dnsCacheKey(tag, dnsServer, host string) string {
 	return tag + "|" + dnsServer + "|" + host
 }
 
-func resolveTunnelVia(ctx context.Context, dev *Device, tag string, dnsServer string, host string) (netip.Addr, error) {
-	normDNS := amneziawg.NormalizeDNSServer(dnsServer)
-	if normDNS == "" {
-		normDNS = defaultDNSFor(dev.LocalAddresses())
+// tunnelDNSServerFor normalizes dnsServer, empty meaning the family default.
+func tunnelDNSServerFor(dev *Device, dnsServer string) string {
+	if normDNS := amneziawg.NormalizeDNSServer(dnsServer); normDNS != "" {
+		return normDNS
 	}
+	return defaultDNSFor(dev.LocalAddresses())
+}
+
+// cachedTunnelAddr returns host's unexpired cache entry; it never queries.
+func cachedTunnelAddr(dev *Device, tag string, dnsServer string, host string) (netip.Addr, bool) {
+	key := dnsCacheKey(tag, tunnelDNSServerFor(dev, dnsServer), host)
+	tunnelDNSCache.mu.Lock()
+	defer tunnelDNSCache.mu.Unlock()
+	e, ok := tunnelDNSCache.m[key]
+	return e.addr, ok && time.Now().Before(e.exp)
+}
+
+func resolveTunnelVia(ctx context.Context, dev *Device, tag string, dnsServer string, host string) (netip.Addr, error) {
+	if addr, ok := cachedTunnelAddr(dev, tag, dnsServer, host); ok {
+		return addr, nil
+	}
+	normDNS := tunnelDNSServerFor(dev, dnsServer)
 	key := dnsCacheKey(tag, normDNS, host)
 	now := time.Now()
-	tunnelDNSCache.mu.Lock()
-	if e, ok := tunnelDNSCache.m[key]; ok && now.Before(e.exp) {
-		tunnelDNSCache.mu.Unlock()
-		return e.addr, nil
+
+	select {
+	case tunnelDNSSlots <- struct{}{}:
+		defer func() { <-tunnelDNSSlots }()
+	case <-ctx.Done():
+		return netip.Addr{}, fmt.Errorf("dns lookup %q: too many lookups in flight: %w", host, ctx.Err())
 	}
-	tunnelDNSCache.mu.Unlock()
 
 	server, err := netip.ParseAddrPort(normDNS)
 	if err != nil {
@@ -135,21 +158,42 @@ func flushTunnelDNSCacheForTag(tag string) {
 	}
 }
 
-// exchangeTunnelDNSWithFallback queries A and/or AAAA depending on the local
-// address families configured on the device stack.
-func exchangeTunnelDNSWithFallback(ctx context.Context, conn *gonet.UDPConn, addrs []netip.Addr, host string) (netip.Addr, error) {
+// dnsQueryTypesFor asks only for families the tunnel can dial, so a v4-only tunnel
+// never caches an unroutable AAAA answer (#6570). No addresses keeps A then AAAA.
+func dnsQueryTypesFor(addrs []netip.Addr) []dnsmessage.Type {
 	hasV4 := deviceHasV4(addrs)
 	hasV6 := deviceHasV6(addrs)
-
-	// If the tunnel is IPv6-only, query AAAA first; else query A first.
-	types := []dnsmessage.Type{dnsmessage.TypeA, dnsmessage.TypeAAAA}
-	if hasV6 && !hasV4 {
-		types = []dnsmessage.Type{dnsmessage.TypeAAAA, dnsmessage.TypeA}
+	switch {
+	case hasV4 && hasV6:
+		return []dnsmessage.Type{dnsmessage.TypeA, dnsmessage.TypeAAAA}
+	case hasV6:
+		return []dnsmessage.Type{dnsmessage.TypeAAAA}
+	case hasV4:
+		return []dnsmessage.Type{dnsmessage.TypeA}
+	default:
+		return []dnsmessage.Type{dnsmessage.TypeA, dnsmessage.TypeAAAA}
 	}
+}
+
+// tunnelSupportsAddr reports whether the device stack has a local address in
+// the same family as ip (IPv4-mapped IPv6 counts as IPv4).
+func tunnelSupportsAddr(addrs []netip.Addr, ip netip.Addr) bool {
+	if !ip.IsValid() {
+		return false
+	}
+	if ip.Is4() || ip.Is4In6() {
+		return deviceHasV4(addrs)
+	}
+	return deviceHasV6(addrs)
+}
+
+// exchangeTunnelDNSWithFallback returns the first answer among the families the
+// device stack can route.
+func exchangeTunnelDNSWithFallback(ctx context.Context, conn *gonet.UDPConn, addrs []netip.Addr, host string) (netip.Addr, error) {
+	types := dnsQueryTypesFor(addrs)
 
 	var firstErr error
 	for _, qType := range types {
-		// Skip AAAA if device has no IPv6 capability and has IPv4, unless A failed.
 		addr, err := exchangeTunnelDNSQuery(ctx, conn, host, qType)
 		if err == nil {
 			return addr, nil

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mhsanaei/3x-ui/v3/internal/database"
+	"github.com/mhsanaei/3x-ui/v3/internal/database/dbtest"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/locale"
 	"github.com/mhsanaei/3x-ui/v3/internal/xray"
 
@@ -27,18 +27,14 @@ func clientInfoLocalizer(t *testing.T) {
 		&i18n.Message{ID: "tgbot.messages.expire", Other: "Expire Date: {{ .Time }}\r\n"},
 		&i18n.Message{ID: "tgbot.wentWrong", Other: "went wrong"},
 	)
-	orig := locale.LocalizerBot
-	t.Cleanup(func() { locale.LocalizerBot = orig })
-	locale.LocalizerBot = i18n.NewLocalizer(bundle, "en-US")
+	orig := locale.SwapBotLocalizer(i18n.NewLocalizer(bundle, "en-US"))
+	t.Cleanup(func() { locale.SwapBotLocalizer(orig) })
 }
 
 // Regression test: a start-after-first-use client is stored as a negative duration,
 // and a disabled one rendered it as a 1969 date.
 func TestClientInfoShowsStartAfterFirstUseWhenDisabled(t *testing.T) {
-	if err := database.InitDB(filepath.Join(t.TempDir(), "x-ui.db")); err != nil {
-		t.Fatalf("InitDB: %v", err)
-	}
-	t.Cleanup(func() { _ = database.CloseDB() })
+	dbtest.InitDB(t, filepath.Join(t.TempDir(), "x-ui.db"))
 	clientInfoLocalizer(t)
 
 	traffic := &xray.ClientTraffic{

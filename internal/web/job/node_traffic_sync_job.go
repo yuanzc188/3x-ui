@@ -140,7 +140,9 @@ func (j *NodeTrafficSyncJob) Run() {
 	}
 	if clientsDisabled {
 		if restartOnDisable, settingErr := j.settingService.GetRestartXrayOnClientDisable(); settingErr == nil && restartOnDisable {
-			if err := j.xrayService.RestartXray(true); err != nil {
+			// Not forced: a client only nodes serve leaves the local config unchanged, and a node
+			// deciding when this tick disables clients must not decide when local users drop.
+			if err := j.xrayService.RestartXray(false); err != nil {
 				logger.Warning("node traffic sync: restart xray after disabling clients failed:", err)
 				j.xrayService.SetToNeedRestart()
 			}
@@ -387,6 +389,13 @@ func (j *NodeTrafficSyncJob) syncOne(mgr *runtime.Manager, n *model.Node, doIpSy
 		}
 	}
 
+	// Before the snapshot, so counters a reset just zeroed are what gets merged.
+	resetCtx, resetCancel := context.WithTimeout(context.Background(), nodeTrafficSyncRequestTimeout)
+	if resetErr := j.inboundService.DeliverNodeResets(resetCtx, n.Id, rt); resetErr != nil {
+		logger.Warningf("node traffic sync: reset delivery to %s failed, retrying next tick: %v", n.Name, resetErr)
+	}
+	resetCancel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), nodeTrafficSyncRequestTimeout)
 	defer cancel()
 
@@ -443,7 +452,7 @@ func (j *NodeTrafficSyncJob) syncOne(mgr *runtime.Manager, n *model.Node, doIpSy
 
 	nodeIps, err := rt.FetchAllClientIps(ipCtx)
 	if err == nil && len(nodeIps) > 0 {
-		if err := j.inboundService.MergeInboundClientIps(nodeIps); err != nil {
+		if err := j.inboundService.MergeNodeClientIps(n.Id, nodeIps); err != nil {
 			logger.Warningf("node traffic sync: merge client ips from %s failed: %v", n.Name, err)
 		}
 	} else if err != nil {

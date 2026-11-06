@@ -1,6 +1,9 @@
 package tuic
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
@@ -74,6 +77,26 @@ func TestInstanceFromInbound(t *testing.T) {
 	})
 }
 
+func TestStructuralFingerprintDetectsCertificateRenewalAtSamePath(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "fullchain.pem")
+	keyPath := filepath.Join(dir, "privkey.pem")
+	if err := os.WriteFile(certPath, []byte("certificate-v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key-v1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inst := Instance{Listen: "0.0.0.0", Port: 443, Certificate: certPath, PrivateKey: keyPath}
+	before := inst.StructuralFingerprint()
+	if err := os.WriteFile(certPath, []byte("certificate-v2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if before == inst.StructuralFingerprint() {
+		t.Fatal("certificate renewal at the same path did not change the structural fingerprint")
+	}
+}
+
 func TestFingerprints(t *testing.T) {
 	inst1 := Instance{
 		Id:                1,
@@ -101,6 +124,20 @@ func TestFingerprints(t *testing.T) {
 	if inst1.UsersFingerprint() != inst2.UsersFingerprint() {
 		t.Fatalf("users fingerprint must be stable under reordering: %s vs %s", inst1.UsersFingerprint(), inst2.UsersFingerprint())
 	}
+
+	profileOnlyChange := inst1
+	profileOnlyChange.CongestionControl = "new_reno"
+	profileOnlyChange.UDPRelayMode = "quic"
+	profileOnlyChange.SNI = "client-profile.example"
+	if inst1.StructuralFingerprint() != profileOnlyChange.StructuralFingerprint() {
+		t.Fatal("client-profile defaults must not restart the native TUIC listener")
+	}
+
+	packetLimitChange := inst1
+	packetLimitChange.MaxUdpRelayPacketSize = 4096
+	if inst1.StructuralFingerprint() == packetLimitChange.StructuralFingerprint() {
+		t.Fatal("changing the UDP packet limit must update the native TUIC listener")
+	}
 }
 
 func TestBindTo(t *testing.T) {
@@ -108,7 +145,7 @@ func TestBindTo(t *testing.T) {
 		listen string
 		want   string
 	}{
-		{"", "0.0.0.0:8443"},
+		{"", ":8443"},
 		{"127.0.0.1", "127.0.0.1:8443"},
 		{"::", "[::]:8443"},
 		{"2001:db8::1", "[2001:db8::1]:8443"},
@@ -120,5 +157,25 @@ func TestBindTo(t *testing.T) {
 				t.Fatalf("BindTo(%q) = %q, want %q", tc.listen, got, tc.want)
 			}
 		})
+	}
+}
+
+// A pushed TUIC inbound names any path on this host, and both readers take the file
+// whole, so a device or an oversized file is refused before either opens it.
+func TestCertificateReadersRefuseWhatIsNoBoundedRegularFile(t *testing.T) {
+	big := filepath.Join(t.TempDir(), "big.pem")
+	if err := os.WriteFile(big, make([]byte, 1<<20+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadCertificate(big, big); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("loadCertificate(oversized) = %v, want the path refused before the read", err)
+	}
+	inst := Instance{Certificate: big}
+	before := inst.StructuralFingerprint()
+	if err := os.WriteFile(big, append(make([]byte, 1<<20), 1, 2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if inst.StructuralFingerprint() != before {
+		t.Fatal("the oversized certificate file was read into the fingerprint")
 	}
 }

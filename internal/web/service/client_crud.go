@@ -19,6 +19,7 @@ import (
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
+	"github.com/mhsanaei/3x-ui/v3/internal/tuic"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/random"
 	"github.com/mhsanaei/3x-ui/v3/internal/xray"
@@ -36,6 +37,9 @@ func hasForbiddenClientChar(s string) bool {
 }
 
 func validateClientEmail(email string) error {
+	if email == "." || email == ".." {
+		return common.NewError("client email must not be '.' or '..'")
+	}
 	if hasForbiddenClientChar(email) {
 		return common.NewError("client email contains an invalid character:", email)
 	}
@@ -81,6 +85,31 @@ func validateClientResetMax(resetMax int) error {
 	return nil
 }
 
+func validateClientRenewal(client model.Client) error {
+	if err := validateClientResetDay(client.ResetDay); err != nil {
+		return err
+	}
+	if client.Reset > maxClientResetDays {
+		return common.NewError("client reset must not exceed", maxClientResetDays, "days")
+	}
+	if client.ResetWeekday < 0 || client.ResetWeekday > 7 {
+		return common.NewError("client resetWeekday must be between 0 and 7, got:", client.ResetWeekday)
+	}
+	if client.ResetWeekday > 0 && (client.Reset > 0 || client.ResetDay > 0) {
+		return common.NewError("client weekly renewal cannot be combined with reset or resetDay")
+	}
+	return nil
+}
+
+func validateClientsRenewal(clients []model.Client) error {
+	for _, client := range clients {
+		if err := validateClientRenewal(client); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // normalizeClientTrafficReset stores what the inbound path would store, so the
 // day never reaches the DB as a 0 that three layers downstream each clamp to 1.
 func normalizeClientTrafficReset(c *model.Client) {
@@ -97,22 +126,27 @@ type ClientResetCycle struct {
 	TrafficResetDay int
 	Enable          bool
 	Total           int64
-	Used            int64
+	Up              int64
+	Down            int64
 }
 
 // Depleted reports a client the quota switched off. A reset restores that one;
 // a client disabled below its quota was switched off by hand and stays off.
 func (c ClientResetCycle) Depleted() bool {
-	return c.Total > 0 && c.Used >= c.Total
+	return c.Total > 0 && clampedTrafficAdd(c.Up, c.Down) >= c.Total
+}
+
+func clientResetCycles(tx *gorm.DB) *gorm.DB {
+	return tx.Table("clients c").
+		Select("c.email, c.traffic_reset_day, c.enable, COALESCE(ct.total, 0) AS total, COALESCE(ct.up, 0) AS up, COALESCE(ct.down, 0) AS down").
+		Joins("LEFT JOIN client_traffics ct ON ct.email = c.email")
 }
 
 // GetClientsByTrafficReset returns the clients whose own reset cycle matches the
 // period, independent of the cycle configured on the inbounds they belong to.
 func (s *ClientService) GetClientsByTrafficReset(period string) ([]ClientResetCycle, error) {
 	var cycles []ClientResetCycle
-	err := database.GetDB().Table("clients c").
-		Select("c.email, c.traffic_reset_day, c.enable, COALESCE(ct.total, 0) AS total, COALESCE(ct.up, 0) + COALESCE(ct.down, 0) AS used").
-		Joins("LEFT JOIN client_traffics ct ON ct.email = c.email").
+	err := clientResetCycles(database.GetDB()).
 		Where("c.traffic_reset = ?", period).
 		Scan(&cycles).Error
 	if err != nil {
@@ -121,12 +155,47 @@ func (s *ClientService) GetClientsByTrafficReset(period string) ([]ClientResetCy
 	return cycles, nil
 }
 
+// quotaDisabledEmails lists the disabled clients whose usage reached their quota,
+// only those in within unless it is nil. Read it before zeroing the counters,
+// which hides why a client is off.
+func quotaDisabledEmails(tx *gorm.DB, within []string) ([]string, error) {
+	var cycles []ClientResetCycle
+	if err := clientResetCycles(tx).Where("c.enable = ?", false).Scan(&cycles).Error; err != nil {
+		return nil, err
+	}
+	// Cross-panel usage depletes too: a client cut off on pushed usage was the quota's doing.
+	rows := make([]xray.ClientTraffic, len(cycles))
+	for i, c := range cycles {
+		rows[i] = xray.ClientTraffic{Email: c.Email, Up: c.Up, Down: c.Down, Total: c.Total}
+	}
+	overlayGlobalTrafficValues(tx, rows)
+	for i := range cycles {
+		cycles[i].Up, cycles[i].Down = rows[i].Up, rows[i].Down
+	}
+	var in map[string]bool
+	if within != nil {
+		in = make(map[string]bool, len(within))
+		for _, e := range within {
+			in[e] = true
+		}
+	}
+	var emails []string
+	for _, c := range cycles {
+		if c.Depleted() && (in == nil || in[c.Email]) {
+			emails = append(emails, c.Email)
+		}
+	}
+	return emails, nil
+}
+
 // Create applies the client to every requested inbound: one failing inbound no
 // longer aborts the others, so the error can name several and needRestart holds.
 func (s *ClientService) Create(inboundSvc *InboundService, payload *ClientCreatePayload) (bool, error) {
 	if payload == nil {
 		return false, common.NewError("empty payload")
 	}
+	// A repeated id adds nothing but another copy of the client held through the fan-out.
+	payload.InboundIds = uniqueInts(payload.InboundIds)
 	client := payload.Client
 	if strings.TrimSpace(client.Email) == "" {
 		return false, common.NewError("client email is required")
@@ -137,7 +206,7 @@ func (s *ClientService) Create(inboundSvc *InboundService, payload *ClientCreate
 	if err := validateClientSubID(client.SubID); err != nil {
 		return false, err
 	}
-	if err := validateClientResetDay(client.ResetDay); err != nil {
+	if err := validateClientRenewal(client); err != nil {
 		return false, err
 	}
 	if err := validateClientResetMax(client.ResetMax); err != nil {
@@ -147,6 +216,11 @@ func (s *ClientService) Create(inboundSvc *InboundService, payload *ClientCreate
 		return false, err
 	}
 	normalizeClientTrafficReset(&client)
+	// Nothing to withdraw on a new client, so a blank spec is no spec.
+	if client.ForwardedPortsSpec() == "" {
+		client.ForwardedPorts = nil
+	}
+	client.ClientHostRuleIds = model.NormalizeClientHostRuleIds(client.ClientHostRuleIds)
 	if len(payload.InboundIds) == 0 {
 		return false, common.NewError("at least one inbound is required")
 	}
@@ -222,6 +296,9 @@ func (s *ClientService) Create(inboundSvc *InboundService, payload *ClientCreate
 			// comment on the Attach path.
 			clientForInbound.AllowedIPs = nil
 		}
+		if err := validateAmneziaWGClientWrite(inbound, []model.Client{clientForInbound}, ""); err != nil {
+			return false, fmt.Errorf("inbound %d: %w", ibId, err)
+		}
 		settingsPayload, mErr := json.Marshal(map[string][]model.Client{"clients": {clientWithInboundFlow(clientForInbound, inbound)}})
 		if mErr != nil {
 			return false, fmt.Errorf("inbound %d: %w", ibId, mErr)
@@ -234,10 +311,15 @@ func (s *ClientService) Create(inboundSvc *InboundService, payload *ClientCreate
 		// already existed, and a create the panel reported as failed must not.
 		return needRestart, fanoutErr
 	}
-	// A re-created email is a live identity again: a delete tombstone left
-	// standing makes the next node merge prune the new client's inbound links.
-	withdrawClientTombstones(client.Email)
-	return needRestart, s.setClientLimitHwidByEmail(nil, client.Email, payload.LimitHwid)
+	// nil means omitted and preserves the stored binding.
+	if client.ClientHostRuleIds != nil {
+		if err := database.GetDB().Model(&model.ClientRecord{}).
+			Where("email = ?", client.Email).
+			Update("client_host_rule_ids", model.EncodeClientHostRuleIds(client.ClientHostRuleIds)).Error; err != nil {
+			return needRestart, err
+		}
+	}
+	return needRestart, s.setClientLimitHwidByEmail(client.Email, payload.LimitHwid)
 }
 
 // inboundFanoutConcurrency caps how many inbounds one client op applies at
@@ -384,12 +466,19 @@ func markInboundNodesDirty(inboundIds []int) error {
 }
 
 func (s *ClientService) fillProtocolDefaults(c *model.Client, ib *model.Inbound) error {
+	return s.fillProtocolDefaultsAgainstExisting(c, ib, nil)
+}
+
+func (s *ClientService) fillProtocolDefaultsAgainstExisting(c *model.Client, ib *model.Inbound, existing []model.Client, identityEmail ...string) error {
+	if err := validateClientKeepAliveAgainstExisting(ib.Protocol, *c, existing, identityEmail...); err != nil {
+		return err
+	}
 	switch ib.Protocol {
 	case model.VMESS, model.VLESS:
 		if c.ID == "" {
 			c.ID = uuid.NewString()
 		}
-	case model.Trojan:
+	case model.Trojan, model.MASQUE:
 		if c.Password == "" {
 			c.Password = strings.ReplaceAll(uuid.NewString(), "-", "")
 		}
@@ -407,6 +496,9 @@ func (s *ClientService) fillProtocolDefaults(c *model.Client, ib *model.Inbound)
 			c.Secret = model.GenerateFakeTLSSecret(mtprotoDomainFromSettings(ib.Settings))
 		}
 	case model.TUIC:
+		if err := tuic.ValidateRelayEmail(c.Email); err != nil {
+			return err
+		}
 		if c.ID == "" {
 			c.ID = uuid.NewString()
 		}
@@ -487,6 +579,32 @@ func shadowsocksKeyBytes(method string) int {
 	return 0
 }
 
+// validateShadowsocks2022Inbound refuses a method or server key xray-core cannot
+// build an inbound from: the core then does not start at all.
+func validateShadowsocks2022Inbound(protocol model.Protocol, settings string) error {
+	if protocol != model.Shadowsocks {
+		return nil
+	}
+	var parsed struct {
+		Method   string `json:"method"`
+		Password string `json:"password"`
+	}
+	if json.Unmarshal([]byte(settings), &parsed) != nil {
+		return nil
+	}
+	n := xray.Shadowsocks2022KeyBytes(parsed.Method)
+	if n == 0 {
+		return nil
+	}
+	if xray.Shadowsocks2022NoMultiUser(parsed.Method) {
+		return common.NewErrorf("shadowsocks inbound method %s does not support multiple users, use a 2022-blake3-aes method", parsed.Method)
+	}
+	if !xray.ValidShadowsocks2022Key(parsed.Method, parsed.Password) {
+		return common.NewErrorf("shadowsocks inbound password: %s needs a %d-byte key, base64 encoded", parsed.Method, n)
+	}
+	return nil
+}
+
 // normalizeShadowsocksClientKeys rewrites any Shadowsocks-2022 client password
 // whose decoded length no longer matches settings.method, which happens after the
 // inbound method is switched between ciphers of different key sizes (e.g.
@@ -557,6 +675,12 @@ func applyShadowsocksClientMethod(clients []any, settings map[string]any) {
 }
 
 func (s *ClientService) Update(inboundSvc *InboundService, id int, updated model.Client, limitHwid int, inboundFilter ...int) (bool, error) {
+	return s.update(inboundSvc, id, updated, limitHwid, false, inboundFilter)
+}
+
+// keepInboundFlows: the caller sent no flow, so every inbound keeps its own and an
+// unlinked record keeps its stored one.
+func (s *ClientService) update(inboundSvc *InboundService, id int, updated model.Client, limitHwid int, keepInboundFlows bool, inboundFilter []int) (bool, error) {
 	existing, err := s.GetByID(id)
 	if err != nil {
 		return false, err
@@ -588,10 +712,21 @@ func (s *ClientService) Update(inboundSvc *InboundService, id int, updated model
 	if err := validateClientEmail(updated.Email); err != nil {
 		return false, err
 	}
+	if emailErr := tuic.ValidateRelayEmail(updated.Email); emailErr != nil {
+		var attached int64
+		if err := database.GetDB().Model(&model.Inbound{}).
+			Joins("JOIN client_inbounds ci ON ci.inbound_id = inbounds.id").
+			Where("ci.client_id = ? AND inbounds.protocol = ?", id, model.TUIC).Count(&attached).Error; err != nil {
+			return false, err
+		}
+		if attached > 0 {
+			return false, emailErr
+		}
+	}
 	if err := validateClientSubID(updated.SubID); err != nil {
 		return false, err
 	}
-	if err := validateClientResetDay(updated.ResetDay); err != nil {
+	if err := validateClientRenewal(updated); err != nil {
 		return false, err
 	}
 	if err := validateClientResetMax(updated.ResetMax); err != nil {
@@ -600,7 +735,25 @@ func (s *ClientService) Update(inboundSvc *InboundService, id int, updated model
 	if err := validateClientTrafficReset(updated.TrafficReset, updated.TrafficResetDay); err != nil {
 		return false, err
 	}
+	existingClientsByInbound := make(map[int][]model.Client, len(attachedIds))
+	if updated.KeepAlive != nil {
+		for _, inboundID := range attachedIds {
+			inbound, getErr := inboundSvc.GetInbound(inboundID)
+			if getErr != nil {
+				return false, fmt.Errorf("inbound %d: %w", inboundID, getErr)
+			}
+			clients, getErr := inboundSvc.GetClients(inbound)
+			if getErr != nil {
+				return false, fmt.Errorf("inbound %d: %w", inboundID, getErr)
+			}
+			existingClientsByInbound[inboundID] = clients
+			if err := validateClientKeepAliveAgainstExisting(inbound.Protocol, updated, clients, existing.Email); err != nil {
+				return false, fmt.Errorf("inbound %d: %w", inboundID, err)
+			}
+		}
+	}
 	normalizeClientTrafficReset(&updated)
+	updated.ClientHostRuleIds = model.NormalizeClientHostRuleIds(updated.ClientHostRuleIds)
 	if updated.SubID == "" {
 		updated.SubID = existing.SubID
 	}
@@ -629,6 +782,12 @@ func (s *ClientService) Update(inboundSvc *InboundService, id int, updated model
 		updated.Secret = existing.Secret
 	}
 
+	// A client the quota loop switched off comes back on when this update
+	// restores a usable window, as BulkAdjust already does on a renewal (#5619).
+	if !updated.Enable && s.renewalReenables(existing.Email, updated.TotalGB, updated.ExpiryTime) {
+		updated.Enable = true
+	}
+
 	if updated.Email != existing.Email {
 		var collisionCount int64
 		if err := database.GetDB().Model(&model.ClientRecord{}).
@@ -650,6 +809,14 @@ func (s *ClientService) Update(inboundSvc *InboundService, id int, updated model
 		}
 		if subCollision > 0 {
 			return false, common.NewError("Duplicate subId:", updated.SubID)
+		}
+	}
+
+	var inboundFlows map[int]string
+	if keepInboundFlows {
+		updated.Flow = existing.Flow
+		if inboundFlows, err = inboundFlowOverrides(id); err != nil {
+			return false, err
 		}
 	}
 
@@ -677,10 +844,13 @@ func (s *ClientService) Update(inboundSvc *InboundService, id int, updated model
 		if existing.Email == "" {
 			continue
 		}
-		if err := s.fillProtocolDefaults(&updated, inbound); err != nil {
+		if err := s.fillProtocolDefaultsAgainstExisting(&updated, inbound, existingClientsByInbound[ibId], existing.Email); err != nil {
 			return false, err
 		}
 		clientForInbound := updated
+		if keepInboundFlows {
+			clientForInbound.Flow = inboundFlows[ibId]
+		}
 		if ips, ok := updated.AllowedIPsByInbound[ibId]; ok {
 			clientForInbound.AllowedIPs = ips
 		} else if tunnelCount > 1 && (inbound.Protocol == model.WireGuard || inbound.Protocol == model.AmneziaWG) {
@@ -701,6 +871,9 @@ func (s *ClientService) Update(inboundSvc *InboundService, id int, updated model
 			// branch) preserve THIS inbound's existing, correct value
 			// instead.
 			clientForInbound.AllowedIPs = nil
+		}
+		if err := validateAmneziaWGClientWrite(inbound, []model.Client{clientForInbound}, existing.Email); err != nil {
+			return false, fmt.Errorf("inbound %d: %w", ibId, err)
 		}
 		settingsPayload, mErr := json.Marshal(map[string][]model.Client{"clients": {clientWithInboundFlow(clientForInbound, inbound)}})
 		if mErr != nil {
@@ -734,33 +907,49 @@ func (s *ClientService) Update(inboundSvc *InboundService, id int, updated model
 	if len(inboundIds) == 0 {
 		merged := *existing
 		applyClientRecordMerge(&merged, updated.ToRecord())
+		keepAliveLegacy, keepAliveRange, keepAliveErr := model.KeepAliveStorage(merged.KeepAlive)
+		if keepAliveErr != nil {
+			return needRestart, keepAliveErr
+		}
 		if err := database.GetDB().Model(&model.ClientRecord{}).
 			Where("id = ?", id).
 			Updates(map[string]any{
-				"sub_id":            merged.SubID,
-				"uuid":              merged.UUID,
-				"password":          merged.Password,
-				"auth":              merged.Auth,
-				"secret":            merged.Secret,
-				"flow":              merged.Flow,
-				"security":          merged.Security,
-				"wg_private_key":    merged.PrivateKey,
-				"wg_public_key":     merged.PublicKey,
-				"wg_allowed_ips":    merged.AllowedIPs,
-				"wg_pre_shared_key": merged.PreSharedKey,
-				"wg_keep_alive":     merged.KeepAlive,
-				"limit_ip":          merged.LimitIP,
-				"total_gb":          merged.TotalGB,
-				"expiry_time":       merged.ExpiryTime,
-				"tg_id":             merged.TgID,
-				"comment":           merged.Comment,
-				"reset":             merged.Reset,
-				"reset_day":         merged.ResetDay,
-				"reset_max":         merged.ResetMax,
-				"traffic_reset":     merged.TrafficReset,
-				"traffic_reset_day": merged.TrafficResetDay,
+				"sub_id":               merged.SubID,
+				"uuid":                 merged.UUID,
+				"password":             merged.Password,
+				"auth":                 merged.Auth,
+				"secret":               merged.Secret,
+				"flow":                 merged.Flow,
+				"security":             merged.Security,
+				"client_host_rule_ids": model.EncodeClientHostRuleIds(merged.ClientHostRuleIds),
+				"wg_private_key":       merged.PrivateKey,
+				"wg_public_key":        merged.PublicKey,
+				"wg_allowed_ips":       merged.AllowedIPs,
+				"wg_pre_shared_key":    merged.PreSharedKey,
+				"wg_keep_alive":        keepAliveLegacy,
+				"wg_keep_alive_range":  keepAliveRange,
+				"limit_ip":             merged.LimitIP,
+				"total_gb":             merged.TotalGB,
+				"expiry_time":          merged.ExpiryTime,
+				"tg_id":                merged.TgID,
+				"comment":              merged.Comment,
+				"reset":                merged.Reset,
+				"reset_day":            merged.ResetDay,
+				"reset_weekday":        merged.ResetWeekday,
+				"reset_max":            merged.ResetMax,
+				"traffic_reset":        merged.TrafficReset,
+				"traffic_reset_day":    merged.TrafficResetDay,
 			}).Error; err != nil {
 			return needRestart, err
+		}
+		// No inbound left, so UpdateClientStat never runs; re-assert the
+		// enforcement row's off switch here or a re-enabled client stays off.
+		if merged.Enable {
+			if err := database.GetDB().Model(xray.ClientTraffic{}).
+				Where("email = ?", existing.Email).
+				UpdateColumn("enable", true).Error; err != nil {
+				return needRestart, err
+			}
 		}
 	}
 
@@ -784,8 +973,18 @@ func (s *ClientService) Update(inboundSvc *InboundService, id int, updated model
 	// including the empty string that removes the client from its group.
 	if err := database.GetDB().Model(&model.ClientRecord{}).
 		Where("id = ?", id).
-		UpdateColumn("group_name", updated.Group).Error; err != nil {
+		UpdateColumn("group_name", strings.TrimSpace(updated.Group)).Error; err != nil {
 		return needRestart, err
+	}
+
+	// The AmneziaWG forwards too: the record merge keeps a stored spec when the settings
+	// carry none, so a withdrawal is written here; nil (not sent) leaves it alone.
+	if updated.ForwardedPorts != nil {
+		if err := database.GetDB().Model(&model.ClientRecord{}).
+			Where("id = ?", id).
+			UpdateColumn("wg_forwarded_ports", updated.ForwardedPortsSpec()).Error; err != nil {
+			return needRestart, err
+		}
 	}
 
 	// Same shape as the group write above: SyncInbound keeps a stored ad-tag
@@ -797,13 +996,22 @@ func (s *ClientService) Update(inboundSvc *InboundService, id int, updated model
 		return needRestart, err
 	}
 
+	// nil preserves the stored binding, empty clears it.
+	if updated.ClientHostRuleIds != nil {
+		if err := database.GetDB().Model(&model.ClientRecord{}).
+			Where("id = ?", id).
+			Update("client_host_rule_ids", model.EncodeClientHostRuleIds(updated.ClientHostRuleIds)).Error; err != nil {
+			return needRestart, err
+		}
+	}
+
 	if err := database.GetDB().Model(&model.ClientRecord{}).
 		Where("id = ?", id).
 		UpdateColumn("enable", updated.Enable).Error; err != nil {
 		return needRestart, err
 	}
 
-	if err := s.setClientLimitHwidByEmail(nil, updated.Email, limitHwid); err != nil {
+	if err := s.setClientLimitHwidByEmail(updated.Email, limitHwid); err != nil {
 		return needRestart, err
 	}
 
@@ -868,8 +1076,7 @@ func (s *ClientService) Delete(inboundSvc *InboundService, id int, keepTraffic b
 		return needRestart, errors.Join(delErrs...)
 	}
 
-	db := database.GetDB()
-	if err := db.Transaction(func(tx *gorm.DB) error {
+	if err := runSerializedTx(func(tx *gorm.DB) error {
 		if existing.Email != "" {
 			if err := adjustGroupBaselinesForRemovedTraffic(tx, []string{existing.Email}); err != nil {
 				return err
@@ -982,6 +1189,7 @@ func addressesFitAmneziaWGInbound(addrs []string, ib *model.Inbound) bool {
 // Attach applies the client to every requested inbound: one failing inbound no
 // longer aborts the others, so the error can name several and needRestart holds.
 func (s *ClientService) Attach(inboundSvc *InboundService, id int, inboundIds []int) (bool, error) {
+	inboundIds = uniqueInts(inboundIds)
 	existing, err := s.GetByID(id)
 	if err != nil {
 		return false, err
@@ -1025,6 +1233,9 @@ func (s *ClientService) Attach(inboundSvc *InboundService, id int, inboundIds []
 			return false, fmt.Errorf("inbound %d: %w", ibId, getErr)
 		}
 		copyClient := *clientWire
+		// A forward is a listener on the target inbound's host, set per inbound: carried over, it
+		// would let a node-reported client choose ports on this host.
+		copyClient.ForwardedPorts = nil
 		if !addressesFitAmneziaWGInbound(copyClient.AllowedIPs, inbound) {
 			copyClient.AllowedIPs = nil
 		}

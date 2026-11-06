@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { NativeSelect } from '@/components/form/NativeSelect';
+import { useState, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AutoComplete,
   Button,
   Collapse,
+  Divider,
   Form,
   Input,
   InputNumber,
@@ -15,12 +17,15 @@ import {
 import { CloudDownloadOutlined, SyncOutlined } from '@ant-design/icons';
 import { useFormContext, useWatch } from 'react-hook-form';
 
+import { selectTagRender } from '@/components/form';
 import { FormField } from '@/components/form/rhf';
 import { HttpUtil } from '@/utils';
 
 export default function TuicFields() {
   const { t } = useTranslation();
-  const { control, setValue, getValues } = useFormContext();
+  const uid = useId();
+  const [messageApi, messageContextHolder] = message.useMessage();
+  const { control, setValue } = useFormContext();
   const [loadingPanelCert, setLoadingPanelCert] = useState(false);
 
   const sni = (useWatch({ control, name: 'settings.server.sni' }) ?? '') as string;
@@ -30,24 +35,12 @@ export default function TuicFields() {
 
   const handleSniChange = (newSni: string) => {
     setValue('settings.server.sni', newSni);
-    const cleanSni = newSni.trim();
-    if (!cleanSni) return;
-
-    const currentCert = String(getValues('settings.server.certificate') || '');
-    const currentKey = String(getValues('settings.server.private_key') || '');
-
-    if (!currentCert || currentCert.startsWith('/root/cert/')) {
-      setValue('settings.server.certificate', `/root/cert/${cleanSni}/fullchain.pem`);
-    }
-    if (!currentKey || currentKey.startsWith('/root/cert/')) {
-      setValue('settings.server.private_key', `/root/cert/${cleanSni}/privkey.pem`);
-    }
   };
 
   const autofillFromSni = () => {
     const cleanSni = (sni || '').trim();
     if (!cleanSni) {
-      message.warning(t('pages.xray.tuic.sniHint'));
+      messageApi.warning(t('pages.xray.tuic.sniRequired'));
       return;
     }
     setValue('settings.server.certificate', `/root/cert/${cleanSni}/fullchain.pem`);
@@ -62,12 +55,12 @@ export default function TuicFields() {
           ? await HttpUtil.get(`/panel/api/nodes/webCert/${nodeId}`, undefined, { silent: true })
           : await HttpUtil.post('/panel/api/setting/all', undefined, { silent: true });
       if (!msg?.success) {
-        message.warning(msg?.msg || t('pages.inbounds.setDefaultCertEmpty'));
+        messageApi.warning(msg?.msg || t('pages.inbounds.setDefaultCertEmpty'));
         return;
       }
       const obj = msg.obj as { webCertFile?: string; webKeyFile?: string };
       if (!obj?.webCertFile && !obj?.webKeyFile) {
-        message.warning(t('pages.inbounds.setDefaultCertEmpty'));
+        messageApi.warning(t('pages.inbounds.setDefaultCertEmpty'));
         return;
       }
       if (obj.webCertFile) {
@@ -76,9 +69,9 @@ export default function TuicFields() {
       if (obj.webKeyFile) {
         setValue('settings.server.private_key', obj.webKeyFile);
       }
-      message.success(t('pages.inbounds.setSuccess'));
+      messageApi.success(t('success'));
     } catch {
-      message.error(t('somethingWentWrong'));
+      messageApi.error(t('somethingWentWrong'));
     } finally {
       setLoadingPanelCert(false);
     }
@@ -119,7 +112,7 @@ export default function TuicFields() {
             label={t('pages.xray.tuic.logLevel')}
             tooltip={t('pages.xray.tuic.logLevelHint')}
           >
-            <Select
+            <NativeSelect
               options={[
                 { label: 'Info', value: 'info' },
                 { label: 'Warn', value: 'warn' },
@@ -147,7 +140,7 @@ export default function TuicFields() {
             name={['settings', 'server', 'max_udp_relay_packet_size']}
             label={t('pages.xray.tuic.maxUdpRelayPacketSize')}
           >
-            <InputNumber min={1} style={{ width: '100%' }} />
+            <InputNumber min={1} max={65245} style={{ width: '100%' }} />
           </FormField>
         </>
       ),
@@ -156,22 +149,10 @@ export default function TuicFields() {
 
   return (
     <>
-      <Form.Item label={t('pages.xray.tuic.sni')}>
-        <Space.Compact style={{ display: 'flex' }}>
-          <Input
-            value={sni}
-            placeholder="example.com"
-            onChange={(e) => handleSniChange(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <Button icon={<SyncOutlined />} onClick={autofillFromSni}>
-            {t('pages.inbounds.form.autoFill')}
-          </Button>
-        </Space.Compact>
-      </Form.Item>
-
-      <Form.Item label={t('pages.inbounds.publicKey')}>
+      {messageContextHolder}
+      <Form.Item htmlFor={`${uid}-certificate`} label={t('pages.inbounds.publicKey')}>
         <AutoComplete
+          id={`${uid}-certificate`}
           value={certificate}
           options={certOptions}
           onChange={(v) => setValue('settings.server.certificate', v)}
@@ -179,8 +160,9 @@ export default function TuicFields() {
         />
       </Form.Item>
 
-      <Form.Item label={t('pages.inbounds.privatekey')}>
+      <Form.Item htmlFor={`${uid}-privateKey`} label={t('pages.inbounds.privatekey')}>
         <AutoComplete
+          id={`${uid}-privateKey`}
           value={privateKey}
           options={keyOptions}
           onChange={(v) => setValue('settings.server.private_key', v)}
@@ -189,14 +171,17 @@ export default function TuicFields() {
       </Form.Item>
 
       <Form.Item label=" ">
-        <Space>
+        <Space wrap style={{ display: 'flex', flexWrap: 'wrap', width: '100%' }}>
           <Button
             type="primary"
-            icon={<CloudDownloadOutlined />}
+            icon={<CloudDownloadOutlined aria-hidden />}
             loading={loadingPanelCert}
             onClick={setCertFromPanel}
           >
             {t('pages.inbounds.setDefaultCert')}
+          </Button>
+          <Button icon={<SyncOutlined aria-hidden />} onClick={autofillFromSni}>
+            {t('pages.inbounds.form.autoFill')}
           </Button>
           <Button
             danger
@@ -213,8 +198,9 @@ export default function TuicFields() {
       <FormField
         name={['settings', 'server', 'congestion_control']}
         label={t('pages.xray.tuic.congestionControl')}
+        tooltip={t('pages.xray.tuic.congestionControlHint')}
       >
-        <Select
+        <NativeSelect
           options={[
             { label: 'BBR', value: 'bbr' },
             { label: 'CUBIC', value: 'cubic' },
@@ -226,6 +212,7 @@ export default function TuicFields() {
       <FormField name={['settings', 'server', 'alpn']} label={t('pages.xray.tuic.alpn')}>
         <Select
           mode="tags"
+          tagRender={selectTagRender}
           tokenSeparators={[',']}
           options={[
             { label: 'h3', value: 'h3' },
@@ -234,11 +221,31 @@ export default function TuicFields() {
         />
       </FormField>
 
+      <Divider titlePlacement="start">{t('pages.xray.tuic.profileOptions')}</Divider>
+
+      <Form.Item
+        htmlFor={`${uid}-sni`}
+        label={t('pages.xray.tuic.sni')}
+        tooltip={t('pages.xray.tuic.sniHint')}
+      >
+        <Input
+          id={`${uid}-sni`}
+          aria-describedby={`${uid}-sni-hint`}
+          value={sni}
+          placeholder="example.com"
+          onChange={(e) => handleSniChange(e.target.value)}
+        />
+        <span id={`${uid}-sni-hint`} hidden>
+          {t('pages.xray.tuic.sniHint')}
+        </span>
+      </Form.Item>
+
       <FormField
         name={['settings', 'server', 'udp_relay_mode']}
         label={t('pages.xray.tuic.udpRelayMode')}
+        tooltip={t('pages.xray.tuic.udpRelayModeHint')}
       >
-        <Select
+        <NativeSelect
           options={[
             { label: 'Native (Recommended)', value: 'native' },
             { label: 'QUIC', value: 'quic' },

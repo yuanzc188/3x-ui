@@ -24,6 +24,33 @@ func TestParseVmessLink(t *testing.T) {
 	}
 }
 
+func TestParseVmessLinkBase64Alphabets(t *testing.T) {
+	raw := []byte(`{"v":"2","ps":"a?>","add":"1.2.3.4","port":443,"id":"uuid","net":"ws","path":"/?","tls":"tls"}`)
+	if padded := base64.URLEncoding.EncodeToString(raw); !strings.ContainsAny(padded, "-_") || !strings.HasSuffix(padded, "=") {
+		t.Fatalf("test object must encode to URL-safe characters with padding, got %s", padded)
+	}
+	cases := []struct {
+		name string
+		b64  string
+	}{
+		{"standard", base64.StdEncoding.EncodeToString(raw)},
+		{"standard unpadded", base64.RawStdEncoding.EncodeToString(raw)},
+		{"url-safe", base64.URLEncoding.EncodeToString(raw)},
+		{"url-safe unpadded", base64.RawURLEncoding.EncodeToString(raw)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, err := ParseLink("vmess://" + c.b64)
+			if err != nil {
+				t.Fatalf("parse %s: %v", c.b64, err)
+			}
+			if res.Outbound["tag"] != "a?>" {
+				t.Errorf("tag = %v, want %q", res.Outbound["tag"], "a?>")
+			}
+		})
+	}
+}
+
 func TestLinkIdentityKeepsTLSServerName(t *testing.T) {
 	a, errA := ParseLink("vless://uuid@1.2.3.4:443?type=ws&security=tls&sni=a.example.com#node")
 	b, errB := ParseLink("vless://uuid@1.2.3.4:443?type=ws&security=tls&sni=b.example.com#node")
@@ -84,6 +111,25 @@ func TestParseVlessLink_FinalMaskQuicParamsSanitized(t *testing.T) {
 	}
 	if got := qp["brutalUp"]; got != "100 mbps" {
 		t.Errorf("brutalUp should stay a string, got %v (%T)", got, got)
+	}
+}
+
+// A panel on xray-core 26.9.30 shares xdns objects whose "name" and typed resolvers
+// 26.10.10 ignores; imported verbatim, the outbound would dial with no domain.
+func TestParseLink_UpgradesLegacyXdnsFinalMask(t *testing.T) {
+	fm := url.QueryEscape(`{"udp":[{"type":"xdns","settings":{"domains":[{"name":"t.example.com","types":[16],"edns0":1232}],"resolvers":[{"type":"udp","settings":{"addr":"8.8.8.8:53"}}]}}]}`)
+	res, err := ParseLink("vless://uuid@1.2.3.4:53?type=kcp&security=none&fm=" + fm + "#dns")
+	if err != nil {
+		t.Fatalf("parse vless with fm: %v", err)
+	}
+	stream, _ := res.Outbound["streamSettings"].(map[string]any)
+	got, err := json.Marshal(stream["finalmask"])
+	if err != nil {
+		t.Fatalf("marshal finalmask: %v", err)
+	}
+	want := `{"udp":[{"settings":{"domains":[{"edns0":1232,"names":["t.example.com"],"types":[16]}],"resolvers":[{"addrs":["udp://8.8.8.8:53"]}]},"type":"xdns"}]}`
+	if string(got) != want {
+		t.Fatalf("imported finalmask\n got: %s\nwant: %s", got, want)
 	}
 }
 
@@ -285,9 +331,9 @@ func TestParseHysteria2_Mport(t *testing.T) {
 			wantHop:   true,
 		},
 		{
-			name:      "legacy fm quicParams.udpHop no longer suppresses mport",
+			name:      "legacy fm quicParams.udpHop is upgraded and wins over mport like the mask",
 			query:     "mport=1-2&fm=" + url.QueryEscape(`{"quicParams":{"udpHop":{"ports":"30000-40000","interval":"7-9"}}}`),
-			wantPorts: "1-2",
+			wantPorts: "30000-40000",
 			wantHop:   true,
 		},
 	}
@@ -514,6 +560,10 @@ func TestSlugAndSuggest(t *testing.T) {
 	if got := SuggestTag("ru-", "Сервер 2", 0); got != "ru-сервер-2" {
 		t.Errorf("unicode suggest tag got %q", got)
 	}
+	// The tag names Xray counters and an outbound_traffics row; a provider picks the remark.
+	if got := SlugRemark(strings.Repeat("Ab ", 1<<20)); got != strings.Repeat("ab-", 21)+"a" {
+		t.Errorf("megabyte remark slug = %.80q (%d bytes), want the first 64 runes", got, len(got))
+	}
 }
 
 // The obfs-local plugin the panel exports carries the only description of
@@ -556,5 +606,99 @@ func TestParseShadowsocksObfsLocalPlugin(t *testing.T) {
 				t.Errorf("host = %q, want %q", got, tc.wantHost)
 			}
 		})
+	}
+}
+
+// A panel older than the 26.9.9 core shares its hop range as quicParams.udpHop inside fm=,
+// which the core ignores; imported verbatim, the outbound would never hop.
+func TestParseLink_UpgradesLegacyUDPHopFinalMask(t *testing.T) {
+	fm := url.QueryEscape(`{"quicParams":{"udpHop":{"ports":"20000-30000","interval":"5-10"}}}`)
+	res, err := ParseLink("hysteria2://auth@hy.example.com:443?sni=hy.example.com&fm=" + fm + "#hy")
+	if err != nil {
+		t.Fatalf("parse hysteria2 with fm: %v", err)
+	}
+	stream, _ := res.Outbound["streamSettings"].(map[string]any)
+	got, err := json.Marshal(stream["finalmask"])
+	if err != nil {
+		t.Fatalf("marshal finalmask: %v", err)
+	}
+	want := `{"udp":[{"settings":{"interval":"5-10","mode":"intervalRemote","remotePorts":"20000-30000"},"type":"udphop"}]}`
+	if string(got) != want {
+		t.Fatalf("imported finalmask\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// A link from a panel that listed udphop before another UDP mask would leave an outbound
+// whose every dial the core refuses ("incorrect index"); the import puts the hop last.
+func TestParseLink_PutsUDPHopMaskLast(t *testing.T) {
+	fm := url.QueryEscape(`{"udp":[{"type":"udphop","settings":{"mode":"intervalRemote","remotePorts":"20000-30000"}},{"type":"salamander","settings":{"password":"s3cr3t"}}]}`)
+	res, err := ParseLink("hysteria2://auth@hy.example.com:443?sni=hy.example.com&fm=" + fm + "#hy")
+	if err != nil {
+		t.Fatalf("parse hysteria2 with fm: %v", err)
+	}
+	stream, _ := res.Outbound["streamSettings"].(map[string]any)
+	got, _ := json.Marshal(stream["finalmask"])
+	want := `{"udp":[{"settings":{"password":"s3cr3t"},"type":"salamander"},{"settings":{"mode":"intervalRemote","remotePorts":"20000-30000"},"type":"udphop"}]}`
+	if string(got) != want {
+		t.Fatalf("imported finalmask\n got: %s\nwant: %s", got, want)
+	}
+}
+
+// A share link describes a remote server; keys that redirect the dial or name files on
+// the importing host must not survive, however the core's case-folding decoder spells them.
+func TestParseLinkDropsHostLocalKeys(t *testing.T) {
+	extra := url.QueryEscape(`{"downloadSettings":{"address":"8.8.8.8","port":443,"network":"xhttp",` +
+		`"sockopt":{"dialerProxy":"api","tcpFastOpen":true},` +
+		`"tlsSettings":{"serverName":"cdn.example.com","CERTIFICATES":[{"certificateFile":"/dev/zero","keyFile":"/etc/shadow"}],"maſterKeyLog":"/root/keys"}}}`)
+	fm := url.QueryEscape(`{"tcp":[{"type":"header-custom","settings":{"DialerProxy":"api"}}]}`)
+	res, err := ParseLink("vless://uuid@8.8.8.8:443?type=xhttp&security=tls&sni=cdn.example.com&extra=" + extra + "&fm=" + fm + "#node")
+	if err != nil {
+		t.Fatalf("parse vless: %v", err)
+	}
+	raw, err := json.Marshal(res.Outbound)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var hostLocal []string
+	var walk func(v any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			for k, child := range v {
+				for _, banned := range []string{"dialerProxy", "certificateFile", "keyFile", "masterKeyLog"} {
+					if strings.EqualFold(k, banned) {
+						hostLocal = append(hostLocal, k)
+					}
+				}
+				walk(child)
+			}
+		case []any:
+			for _, child := range v {
+				walk(child)
+			}
+		}
+	}
+	var decoded any
+	_ = json.Unmarshal(raw, &decoded)
+	walk(decoded)
+	if len(hostLocal) > 0 {
+		t.Fatalf("outbound keeps host-local keys %v: %s", hostLocal, raw)
+	}
+	if !strings.Contains(string(raw), `"tcpFastOpen":true`) || !strings.Contains(string(raw), `"serverName":"cdn.example.com"`) {
+		t.Fatalf("remote-server settings were dropped too: %s", raw)
+	}
+}
+
+// Pretty-printing costs the square of the nesting depth, and extra=, fm= and the vmess
+// JSON copy provider JSON into the outbound; a link may not nest past real shapes.
+func TestParseLinkRejectsDeeplyNestedJSON(t *testing.T) {
+	deep := strings.Repeat(`{"a":`, 40) + `1` + strings.Repeat(`}`, 40)
+	if _, err := ParseLink("vless://uuid@8.8.8.8:443?type=xhttp&security=tls&extra=" + url.QueryEscape(`{"xmux":`+deep+`}`) + "#n"); err == nil {
+		t.Fatal("a link nesting JSON 40 levels deep was accepted")
+	}
+	real := url.QueryEscape(`{"downloadSettings":{"address":"8.8.8.8","port":443,"network":"xhttp","xhttpSettings":{"headers":{"a":"b"}},` +
+		`"finalmask":{"udp":[{"type":"noise","settings":{"noise":[{"type":"rand","packet":"10-20"}]}}]}}}`)
+	if _, err := ParseLink("vless://uuid@8.8.8.8:443?type=xhttp&security=tls&extra=" + real + "#n"); err != nil {
+		t.Fatalf("a real download stream with a finalmask was refused: %v", err)
 	}
 }
