@@ -787,6 +787,40 @@ enable_bbr() {
     fi
 }
 
+# tcpx.sh runs as root and can replace the kernel: pin a reviewed commit and its sha256
+# so an unreviewed upstream change never runs from this menu. Bump both after a review.
+fetch_tcpx_script() {
+    local commit="32653bf0d7aac557fc3e5a1df92d3d0ae85b4544"
+    local sha256="6a19ffbb5af8d8d4540d574507214cca4475320d21f9f59ad3cbf2df865941ca"
+    local url="https://raw.githubusercontent.com/ylx2016/Linux-NetSpeed/${commit}/tcpx.sh"
+    if ! curl -fsSL --connect-timeout 10 -o "$1" "$url"; then
+        LOGE "Failed to download tcpx.sh from ${url}"
+        return 1
+    fi
+    if [[ "$(sha256sum "$1" | awk '{print $1}')" != "${sha256}" ]]; then
+        LOGE "tcpx.sh checksum mismatch, refusing to run it."
+        return 1
+    fi
+}
+
+run_tcpx_script() {
+    echo -e "${yellow}tcpx.sh (github.com/ylx2016/Linux-NetSpeed) is a third-party script run as root.${plain}"
+    echo -e "${yellow}It can install BBR, BBRplus or XanMod kernels and pair BBR with fq or cake.${plain}"
+    echo -e "${yellow}A new kernel needs a reboot; if it fails to boot, only VNC/rescue can fix it.${plain}"
+    echo -e "${yellow}Option 26 already turns on BBR on a 4.9+ kernel without any download.${plain}"
+    if ! confirm "Download and run tcpx.sh?" "n"; then
+        show_menu
+        return
+    fi
+    local script
+    script=$(mktemp) || return 1
+    if fetch_tcpx_script "$script"; then
+        bash "$script"
+    fi
+    rm -f "$script"
+    before_show_menu
+}
+
 update_shell() {
     if replace_xui_script "$(installed_script_url)" "true"; then
         LOGI "Upgrade script succeeded, Please rerun the script"
@@ -3466,10 +3500,11 @@ show_menu() {
 │  ${green}26.${plain} Enable BBR                               │
 │  ${green}27.${plain} Update Geo Files                         │
 │  ${green}28.${plain} Speedtest by Ookla                       │
+│  ${green}29.${plain} BBR Install Script (tcpx.sh)             │
 ╚────────────────────────────────────────────────╝
 "
     show_status
-    echo && read -rp "Please enter your selection [0-28]: " num
+    echo && read -rp "Please enter your selection [0-29]: " num
 
     case "${num}" in
         0)
@@ -3547,8 +3582,11 @@ show_menu() {
         28)
             run_speedtest
             ;;
+        29)
+            run_tcpx_script
+            ;;
         *)
-            LOGE "Please enter the correct number [0-28]"
+            LOGE "Please enter the correct number [0-29]"
             ;;
     esac
 }
