@@ -24,6 +24,15 @@ export function whitelistMode(r: Pick<ForwardRule, 'domainLimit' | 'domains'>): 
   return (r.domains ?? '').trim() ? 'custom' : 'global';
 }
 
+// parsePastedPort reads a pasted port (whitespace and full-width digits tolerated);
+// null means "not a port", and the paste is left to the browser.
+export function parsePastedPort(text: string): number | null {
+  const s = text.normalize('NFKC').trim();
+  if (!/^\d{1,5}$/.test(s)) return null;
+  const n = Number(s);
+  return n >= 1 && n <= 65535 ? n : null;
+}
+
 export type ExpiryLevel = 'none' | 'ok' | 'soon' | 'expired';
 
 const SOON_MS = 3 * 86_400_000;

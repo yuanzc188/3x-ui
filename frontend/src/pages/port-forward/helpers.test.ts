@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { expiryLevel, forwardSaveUrl, inboundAlreadyBound, whitelistMode } from './helpers';
+import {
+  expiryLevel,
+  forwardSaveUrl,
+  inboundAlreadyBound,
+  parsePastedPort,
+  whitelistMode,
+} from './helpers';
 import type { ForwardRule } from './types';
 
 const rule = (over: Partial<ForwardRule>): ForwardRule => ({
@@ -66,5 +72,21 @@ describe('expiryLevel', () => {
   it('soon inside 3 days, ok at 3 days or beyond', () => {
     expect(expiryLevel(now + 2 * day, now)).toBe('soon');
     expect(expiryLevel(now + 3 * day, now)).toBe('ok');
+  });
+});
+
+describe('parsePastedPort', () => {
+  it.each([
+    ['10001', 10001],
+    [' 20002\n', 20002],
+    ['３０００３', 30003],
+    ['65535', 65535],
+    ['0', null],
+    ['65536', null],
+    ['1.2.3.4:1080', null],
+    ['Port: 1080', null],
+    ['', null],
+  ])('%j -> %j', (text, want) => {
+    expect(parsePastedPort(text)).toBe(want);
   });
 });

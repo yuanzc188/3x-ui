@@ -1,11 +1,12 @@
 import { useEffect, useMemo } from 'react';
+import type { ClipboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Form, Input, InputNumber, Modal, Select, Switch, message } from 'antd';
 import dayjs from 'dayjs';
 
 import { useInboundOptions } from '@/api/queries/useInboundOptions';
 import { DateTimePicker } from '@/components/form';
-import { inboundAlreadyBound } from '../helpers';
+import { inboundAlreadyBound, parsePastedPort } from '../helpers';
 import type { ForwardRule } from '../types';
 
 interface Props {
@@ -24,18 +25,51 @@ const emptyValues: Partial<ForwardRule> = {
   expiryTime: 0,
 };
 
+// Bound as the Form.Item child, not via Form.useWatch: the watch lands a macrotask
+// late, and the picker then closes on the stale null and clears the pick.
+function ExpiryPicker({
+  id,
+  value,
+  onChange,
+}: {
+  id?: string;
+  value?: number;
+  onChange?: (ms: number) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <DateTimePicker
+      id={id}
+      aria-label={t('pages.portForward.expiry')}
+      value={value && value > 0 ? dayjs(value) : null}
+      onChange={(d) => onChange?.(d ? d.valueOf() : 0)}
+      showTime={false}
+      format="YYYY-MM-DD"
+    />
+  );
+}
+
 export default function ForwardFormModal({ open, editing, rules, onCancel, onSave }: Props) {
   const { t } = useTranslation();
   const [messageApi, messageContextHolder] = message.useMessage();
   const [form] = Form.useForm<ForwardRule>();
   const { data: inbounds = [] } = useInboundOptions();
   const domainLimit = Form.useWatch('domainLimit', form);
-  const expiryTime = Form.useWatch('expiryTime', form);
 
   useEffect(() => {
     if (!open) return;
+    // The store outlives the hidden modal; without the reset, Add inherits the last edit.
+    form.resetFields();
     form.setFieldsValue(editing ?? emptyValues);
   }, [open, editing, form]);
+
+  // A pasted port replaces the field; the native paste splices it into the old digits.
+  const pastePort = (e: ClipboardEvent<HTMLInputElement>) => {
+    const port = parsePastedPort(e.clipboardData.getData('text'));
+    if (port === null) return;
+    e.preventDefault();
+    form.setFields([{ name: 'destPort', value: port, errors: [] }]);
+  };
 
   const inboundOptions = useMemo(
     () =>
@@ -103,7 +137,7 @@ export default function ForwardFormModal({ open, editing, rules, onCancel, onSav
             label={t('pages.portForward.destPort')}
             rules={[{ required: true }]}
           >
-            <InputNumber min={1} max={65535} style={{ width: '100%' }} />
+            <InputNumber min={1} max={65535} style={{ width: '100%' }} onPaste={pastePort} />
           </Form.Item>
           <Form.Item name="username" label={t('pages.portForward.username')}>
             <Input autoComplete="off" />
@@ -136,19 +170,12 @@ export default function ForwardFormModal({ open, editing, rules, onCancel, onSav
             </Form.Item>
           )}
 
-          <Form.Item name="expiryTime" hidden>
-            <InputNumber />
-          </Form.Item>
           <Form.Item
+            name="expiryTime"
             label={t('pages.portForward.expiry')}
             extra={t('pages.portForward.expiryHint')}
           >
-            <DateTimePicker
-              value={expiryTime && expiryTime > 0 ? dayjs(expiryTime) : null}
-              onChange={(d) => form.setFieldValue('expiryTime', d ? d.valueOf() : 0)}
-              showTime={false}
-              format="YYYY-MM-DD"
-            />
+            <ExpiryPicker />
           </Form.Item>
         </Form>
       </Modal>
