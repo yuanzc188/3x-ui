@@ -10,7 +10,7 @@
 # 保留 /etc/x-ui 数据库与 bin/ 自定义文件），只把下载源改成本 fork 的 Release，
 # 因为 fork 的 Release 是 prerelease，"latest" 解析不到，所以这里自己解析 tag。
 #
-# 更新：重新执行本脚本即可。不要用面板自带的 `x-ui update`，那会装回上游版本。
+# 更新：重新执行本脚本即可（面板和 x-ui 菜单里的自更新已去掉，它们会装回上游版本）。
 #
 # 可选环境变量（透传给 install.sh 的无人值守模式）：
 #   XUI_USERNAME XUI_PASSWORD XUI_PANEL_PORT XUI_WEB_BASE_PATH

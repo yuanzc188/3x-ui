@@ -139,39 +139,8 @@ install() {
     fi
 }
 
-update() {
-    confirm "This function will update all x-ui components to the latest version, and the data will not be lost. Do you want to continue?" "y"
-    if [[ $? != 0 ]]; then
-        LOGE "Cancelled"
-        if [[ $# == 0 ]]; then
-            before_show_menu
-        fi
-        return 0
-    fi
-    bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/main/update.sh)
-    if [[ $? == 0 ]]; then
-        LOGI "Update is complete, Panel has automatically restarted "
-        before_show_menu
-    fi
-}
-
-update_dev() {
-    confirm "This will update x-ui to the latest DEV commit (the rolling 'dev-latest' build, not a stable release). Your data is preserved. Continue?" "y"
-    if [[ $? != 0 ]]; then
-        LOGE "Cancelled"
-        if [[ $# == 0 ]]; then
-            before_show_menu
-        fi
-        return 0
-    fi
-    # XUI_UPDATE_TAG tells update.sh to install the dev-latest pre-release
-    # instead of the latest stable tag.
-    XUI_UPDATE_TAG="dev-latest" bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/main/update.sh)
-    if [[ $? == 0 ]]; then
-        LOGI "Dev update is complete, Panel has automatically restarted "
-        before_show_menu
-    fi
-}
+# update/update_dev/update_menu/legacy_version are removed: each installs upstream's
+# release or menu over this fork. Update with deploy/fork-install.sh instead.
 
 replace_xui_script() {
     local url="$1"
@@ -219,42 +188,6 @@ installed_script_url() {
         echo -e "${yellow}No x-ui.sh published for the installed version (${ver:-unknown}), using main${plain}" >&2
         echo "https://raw.githubusercontent.com/MHSanaei/3x-ui/main/x-ui.sh"
     fi
-}
-
-update_menu() {
-    echo -e "${yellow}Updating Menu${plain}"
-    confirm "This function will update the menu to the latest changes." "y"
-    if [[ $? != 0 ]]; then
-        LOGE "Cancelled"
-        if [[ $# == 0 ]]; then
-            before_show_menu
-        fi
-        return 0
-    fi
-
-    if replace_xui_script "$(installed_script_url)" "false"; then
-        chmod +x ${xui_folder}/x-ui.sh
-        echo -e "${green}Update successful. The panel has automatically restarted.${plain}"
-        exit 0
-    else
-        echo -e "${red}Failed to update the menu.${plain}"
-        return 1
-    fi
-}
-
-legacy_version() {
-    echo -n "Enter the panel version (like 2.4.0):"
-    read -r tag_version
-
-    if [ -z "$tag_version" ]; then
-        echo "Panel version cannot be empty. Exiting."
-        exit 1
-    fi
-    # Use the entered panel version in the download link
-    install_command="bash <(curl -Ls "https://raw.githubusercontent.com/mhsanaei/3x-ui/v$tag_version/install.sh") v$tag_version"
-
-    echo "Downloading and installing panel version $tag_version..."
-    eval $install_command
 }
 
 # Function to handle the deletion of the script file
@@ -3490,12 +3423,9 @@ show_usage() {
 │  ${blue}x-ui disable${plain}               - Disable Autostart on OS Startup  │
 │  ${blue}x-ui log${plain}                   - Check logs                       │
 │  ${blue}x-ui banlog${plain}                - Check Fail2ban ban logs          │
-│  ${blue}x-ui update${plain}                - Update                           │
-│  ${blue}x-ui update-dev${plain}            - Update to Dev channel (latest)   │
 │  ${blue}x-ui update-all-geofiles${plain}   - Update all geo files             │
 │  ${blue}x-ui migrateDB [file]${plain}      - Convert .db <-> .dump (SQLite)   │
 │  ${blue}x-ui pgclient [ver]${plain}        - Upgrade pg_dump/pg_restore tools │
-│  ${blue}x-ui legacy${plain}                - Legacy version                   │
 │  ${blue}x-ui install${plain}               - Install                          │
 │  ${blue}x-ui uninstall${plain}             - Uninstall                        │
 └────────────────────────────────────────────────────────────────┘"
@@ -3508,10 +3438,6 @@ show_menu() {
 │  ${green}0.${plain} Exit Script                               │
 │────────────────────────────────────────────────│
 │  ${green}1.${plain} Install                                   │
-│  ${green}2.${plain} Update                                    │
-│  ${green}3.${plain} Update to Dev Channel (latest commit)     │
-│  ${green}4.${plain} Update Menu                               │
-│  ${green}5.${plain} Legacy Version                            │
 │  ${green}6.${plain} Uninstall                                 │
 │────────────────────────────────────────────────│
 │  ${green}7.${plain} Reset Username & Password                 │
@@ -3551,18 +3477,6 @@ show_menu() {
             ;;
         1)
             check_uninstall && install
-            ;;
-        2)
-            check_install && update
-            ;;
-        3)
-            check_install && update_dev
-            ;;
-        4)
-            check_install && update_menu
-            ;;
-        5)
-            check_install && legacy_version
             ;;
         6)
             check_install && uninstall
@@ -3673,15 +3587,6 @@ if [[ $# -gt 0 ]]; then
             ;;
         "setup-fail2ban")
             setup_fail2ban_iplimit
-            ;;
-        "update")
-            check_install 0 && update 0
-            ;;
-        "update-dev")
-            check_install 0 && update_dev 0
-            ;;
-        "legacy")
-            check_install 0 && legacy_version 0
             ;;
         "install")
             check_uninstall 0 && install 0
