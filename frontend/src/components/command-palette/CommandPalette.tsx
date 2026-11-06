@@ -37,6 +37,7 @@ import { activateOnKey } from '@/utils/a11y';
 import { useInboundOptions } from '@/api/queries/useInboundOptions';
 import { useAllSettings } from '@/api/queries/useAllSettings';
 import { useTheme } from '@/hooks/useTheme';
+import { PANEL_BRAND } from '@/lib/brand';
 import { PANEL_ROUTES } from '@/routes/panelRoutes';
 import type { ClientRecord, InboundOption } from '@/schemas/client';
 import { commandPaletteStore, useCommandPalette } from './useCommandPalette';
@@ -757,7 +758,7 @@ export default function CommandPalette() {
                 {t('close')}
               </span>
             </div>
-            <span>3x-ui Command Palette</span>
+            <span>{PANEL_BRAND} Command Palette</span>
           </div>
         </div>
       </div>

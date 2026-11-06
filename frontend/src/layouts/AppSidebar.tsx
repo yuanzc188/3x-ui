@@ -28,6 +28,7 @@ import {
 } from '@ant-design/icons';
 
 import { HttpUtil } from '@/utils';
+import { PANEL_BRAND } from '@/lib/brand';
 import { formatPanelVersion } from '@/lib/panel-version';
 import { pauseAnimationsUntilLeave, useTheme } from '@/hooks/useTheme';
 import { useAllSettings } from '@/api/queries/useAllSettings';
@@ -339,7 +340,7 @@ export default function AppSidebar() {
       >
         <div className="sider-brand">
           <div className="brand-block">
-            <span className="brand-text">{railCollapsed ? '3X' : '3X-UI'}</span>
+            <span className="brand-text">{PANEL_BRAND}</span>
           </div>
           {!railCollapsed && (
             <div className="brand-actions">
@@ -426,7 +427,7 @@ export default function AppSidebar() {
       >
         <div className="drawer-header">
           <div className="brand-block">
-            <span className="drawer-brand">3X-UI</span>
+            <span className="drawer-brand">{PANEL_BRAND}</span>
           </div>
           <div className="drawer-header-actions">
             <DocsButton ariaLabel={t('menu.docs') || 'Documentation'} />
