@@ -314,6 +314,7 @@ const (
 	cadenceRemoteRouting = "@every 5m"
 	cadenceXrayLogPrune  = "@every 10m"
 	cadenceForwardCheck  = "@every 10m"
+	cadenceClientUsage   = "@every 10m"
 	cadenceCheckHash     = "@every 2m"
 	// cpu.Percent samples over a full minute (blocking), so a finer cadence just
 	// stacks overlapping samplers; subscribers rate-limit alerts to 1/min anyway.
@@ -383,6 +384,7 @@ func (s *Server) startTask(restartXray bool, loc *time.Location) {
 	// Forward proxies: periodic health probe + daily provider-expiry digest
 	_, _ = s.cron.AddJob(cadenceForwardCheck, job.NewForwardCheckJob())
 	_, _ = s.cron.AddJob("@daily", job.NewForwardExpiryJob())
+	_, _ = s.cron.AddJob(cadenceClientUsage, job.NewClientUsageJob())
 
 	// Inbound traffic reset jobs
 	// Run every hour

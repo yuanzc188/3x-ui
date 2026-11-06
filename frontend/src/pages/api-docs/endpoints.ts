@@ -1676,6 +1676,30 @@ export const sections: readonly Section[] = [
         params: [{ name: 'email', in: 'path', type: 'string', desc: 'Client email.' }],
       },
       {
+        method: 'GET',
+        path: '/panel/api/clients/usageLog/:email',
+        summary:
+          'Destinations (host:port) the client opened on one day of the panel time zone, newest first, one entry per destination per minute, kept for retentionDays days. Recorded from the Xray access log every 10 minutes; enabled=false means the access log is off, so nothing new is recorded. At most 5000 entries; truncated=true means older ones were left out.',
+        params: [
+          { name: 'email', in: 'path', type: 'string', desc: 'Client email.' },
+          {
+            name: 'day',
+            in: 'query',
+            type: 'string',
+            desc: 'Day as YYYY-MM-DD in the panel time zone. Defaults to today.',
+            optional: true,
+          },
+          {
+            name: 'filter',
+            in: 'query',
+            type: 'string',
+            desc: 'Case-insensitive substring match on the destination.',
+            optional: true,
+          },
+        ],
+        responseSchema: 'UsageLogDay',
+      },
+      {
         method: 'POST',
         path: '/panel/api/clients/clearIps/:email',
         summary: 'Reset the recorded IP list for a client.',

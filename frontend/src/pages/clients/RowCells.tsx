@@ -5,6 +5,7 @@ import {
   CalendarOutlined,
   DeleteOutlined,
   EditOutlined,
+  HistoryOutlined,
   InfoCircleOutlined,
   QrcodeOutlined,
   RetweetOutlined,
@@ -20,6 +21,7 @@ interface ClientRowActionsProps {
   email: string;
   onShowQr: (email: string) => void;
   onShowInfo: (email: string) => void;
+  onShowUsage: (email: string) => void;
   onResetTraffic: (email: string) => void;
   onRenew: (email: string, months: number) => void;
   onEdit: (email: string) => void;
@@ -35,6 +37,7 @@ export const ClientRowActions = memo(function ClientRowActions({
   email,
   onShowQr,
   onShowInfo,
+  onShowUsage,
   onResetTraffic,
   onRenew,
   onEdit,
@@ -61,6 +64,16 @@ export const ClientRowActions = memo(function ClientRowActions({
           icon={<InfoCircleOutlined aria-hidden />}
           aria-label={t('pages.clients.clientInfo')}
           onClick={() => onShowInfo(email)}
+        />
+      </Tooltip>
+      <Tooltip title={t('pages.clients.usageLog')}>
+        <Button
+          size="small"
+          type="text"
+          style={ICON_BUTTON_STYLE}
+          icon={<HistoryOutlined aria-hidden />}
+          aria-label={t('pages.clients.usageLog')}
+          onClick={() => onShowUsage(email)}
         />
       </Tooltip>
       <Tooltip title={t('pages.inbounds.resetTraffic')}>

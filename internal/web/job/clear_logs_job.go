@@ -93,16 +93,21 @@ func (j *ClearLogsJob) Run() {
 }
 
 func (j *PruneXrayLogsJob) Run() {
-	truncateXrayLog(xray.GetAccessLogPath, maxXrayLogBytes)
-	truncateXrayLog(xray.GetErrorLogPath, maxXrayLogBytes)
+	truncateXrayLog(xray.GetAccessLogPath, maxXrayLogBytes, drainClientUsage)
+	truncateXrayLog(xray.GetErrorLogPath, maxXrayLogBytes, nil)
 }
 
 func wipeXrayLogs() {
-	truncateXrayLog(xray.GetAccessLogPath, 0)
-	truncateXrayLog(xray.GetErrorLogPath, 0)
+	truncateXrayLog(xray.GetAccessLogPath, 0, drainClientUsage)
+	truncateXrayLog(xray.GetErrorLogPath, 0, nil)
 }
 
-func truncateXrayLog(pathFn func() (string, error), maxBytes int64) {
+// drainClientUsage records the access log's unread tail, which a truncate would lose.
+func drainClientUsage() {
+	NewClientUsageJob().Run()
+}
+
+func truncateXrayLog(pathFn func() (string, error), maxBytes int64, beforeTruncate func()) {
 	logPath, err := pathFn()
 	if err != nil || disabledLogPath(logPath) {
 		return
@@ -118,6 +123,9 @@ func truncateXrayLog(pathFn func() (string, error), maxBytes int64) {
 		if info.Size() <= maxBytes {
 			return
 		}
+	}
+	if beforeTruncate != nil {
+		beforeTruncate()
 	}
 	if err := os.Truncate(logPath, 0); err != nil && !os.IsNotExist(err) {
 		logger.Warning("Failed to truncate Xray log:", logPath, "-", err)

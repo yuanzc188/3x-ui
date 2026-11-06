@@ -1258,6 +1258,26 @@ export const EXAMPLES: Record<string, unknown> = {
     "udp_relay_mode": "",
     "zero_rtt_handshake": false
   },
+  "UsageLogDay": {
+    "day": "2025-01-01",
+    "enabled": true,
+    "entries": [
+      {
+        "blocked": false,
+        "destination": "www.tiktok.com:443",
+        "outbound": "forward-inbound-443",
+        "time": 1735732800000
+      }
+    ],
+    "retentionDays": 30,
+    "truncated": false
+  },
+  "UsageLogEntry": {
+    "blocked": false,
+    "destination": "www.tiktok.com:443",
+    "outbound": "forward-inbound-443",
+    "time": 1735732800000
+  },
   "User": {
     "id": 0,
     "password": "",

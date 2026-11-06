@@ -1148,6 +1148,21 @@ export interface TuicServerSettings {
   zero_rtt_handshake: boolean;
 }
 
+export interface UsageLogDay {
+  day: string;
+  enabled: boolean;
+  entries: UsageLogEntry[];
+  retentionDays: number;
+  truncated: boolean;
+}
+
+export interface UsageLogEntry {
+  blocked: boolean;
+  destination: string;
+  outbound: string;
+  time: number;
+}
+
 export interface User {
   id: number;
   password: string;

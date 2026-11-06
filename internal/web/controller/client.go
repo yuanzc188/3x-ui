@@ -41,6 +41,7 @@ type ClientController struct {
 	xrayService    service.XrayService
 	settingService service.SettingService
 	happGenerator  service.HappLinkGenerator
+	usageService   service.ClientUsageService
 }
 
 func NewClientController(g *gin.RouterGroup) *ClientController {
@@ -89,6 +90,7 @@ func (a *ClientController) initRouter(g *gin.RouterGroup) {
 	g.POST("/ips/:email", a.getIps)
 	g.POST("/clearIps/:email", a.clearIps)
 	g.POST("/hwids/:email", a.getHwids)
+	g.GET("/usageLog/:email", a.getUsageLog)
 	g.DELETE("/hwids/:email", a.clearHwids)
 	g.DELETE("/hwids/:email/:id", a.deleteHwid)
 	g.POST("/onlines", a.onlines)
@@ -625,6 +627,16 @@ func (a *ClientController) getIps(c *gin.Context) {
 	email := c.Param("email")
 	infos, err := a.inboundService.GetClientIpsWithNodes(email)
 	jsonObj(c, infos, err)
+}
+
+// getUsageLog returns the destinations one client opened on one day, newest first.
+func (a *ClientController) getUsageLog(c *gin.Context) {
+	day, err := a.usageService.Day(c.Param("email"), c.Query("day"), c.Query("filter"))
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.clients.usageLog"), err)
+		return
+	}
+	jsonObj(c, day, nil)
 }
 
 func (a *ClientController) clientIpsByGuid(c *gin.Context) {

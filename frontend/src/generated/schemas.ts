@@ -5043,6 +5043,70 @@ export const SCHEMAS: Record<string, unknown> = {
     ],
     "type": "object"
   },
+  "UsageLogDay": {
+    "description": "UsageLogDay is one client's usage on one day of the panel's time zone, newest first.",
+    "properties": {
+      "day": {
+        "example": "2025-01-01",
+        "type": "string"
+      },
+      "enabled": {
+        "example": true,
+        "type": "boolean"
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/components/schemas/UsageLogEntry"
+        },
+        "type": "array"
+      },
+      "retentionDays": {
+        "example": 30,
+        "type": "integer"
+      },
+      "truncated": {
+        "example": false,
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "day",
+      "enabled",
+      "entries",
+      "retentionDays",
+      "truncated"
+    ],
+    "type": "object"
+  },
+  "UsageLogEntry": {
+    "description": "UsageLogEntry is one destination a client opened, deduplicated per minute.",
+    "properties": {
+      "blocked": {
+        "example": false,
+        "type": "boolean"
+      },
+      "destination": {
+        "example": "www.tiktok.com:443",
+        "type": "string"
+      },
+      "outbound": {
+        "example": "forward-inbound-443",
+        "type": "string"
+      },
+      "time": {
+        "example": 1735732800000,
+        "format": "int64",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "blocked",
+      "destination",
+      "outbound",
+      "time"
+    ],
+    "type": "object"
+  },
   "User": {
     "description": "User represents a user account in the 3x-ui panel.",
     "properties": {

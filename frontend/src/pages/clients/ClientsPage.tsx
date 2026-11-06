@@ -37,6 +37,7 @@ import {
   DownloadOutlined,
   EditOutlined,
   FilterOutlined,
+  HistoryOutlined,
   InfoCircleOutlined,
   LinkOutlined,
   MoreOutlined,
@@ -85,6 +86,7 @@ import {
 const ClientFormModal = lazy(() => import('./ClientFormModal'));
 const ClientInfoModal = lazy(() => import('./ClientInfoModal'));
 const ClientQrModal = lazy(() => import('./ClientQrModal'));
+const ClientUsageModal = lazy(() => import('./ClientUsageModal'));
 const ClientBulkAddModal = lazy(() => import('./ClientBulkAddModal'));
 const ClientBulkAdjustModal = lazy(() => import('./ClientBulkAdjustModal'));
 const FilterDrawer = lazy(() => import('./FilterDrawer'));
@@ -407,6 +409,8 @@ export default function ClientsPage() {
   const [infoClient, setInfoClient] = useState<ClientRecord | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
   const [qrClient, setQrClient] = useState<ClientRecord | null>(null);
+  const [usageEmail, setUsageEmail] = useState('');
+  const [usageOpen, setUsageOpen] = useState(false);
   const [viewingTunnelAllowedIPs, setViewingTunnelAllowedIPs] = useState<Record<number, string>>(
     {},
   );
@@ -793,6 +797,11 @@ export default function ClientsPage() {
     [hydrate],
   );
 
+  const onShowUsage = useCallback((email: string) => {
+    setUsageEmail(email);
+    setUsageOpen(true);
+  }, []);
+
   const [refreshing, setRefreshing] = useState(false);
   const onRefreshClick = useCallback(async () => {
     setRefreshing(true);
@@ -1084,6 +1093,7 @@ export default function ClientsPage() {
             email={record.email}
             onShowQr={onShowQr}
             onShowInfo={onShowInfo}
+            onShowUsage={onShowUsage}
             onResetTraffic={onResetTraffic}
             onRenew={onRenew}
             onEdit={onEdit}
@@ -1846,6 +1856,16 @@ export default function ClientsPage() {
                                               onClick: () => onShowQr(row.email),
                                             },
                                             {
+                                              key: 'usage',
+                                              label: (
+                                                <>
+                                                  <HistoryOutlined aria-hidden />{' '}
+                                                  {t('pages.clients.usageLog')}
+                                                </>
+                                              ),
+                                              onClick: () => onShowUsage(row.email),
+                                            },
+                                            {
                                               key: 'reset',
                                               label: (
                                                 <>
@@ -1970,6 +1990,14 @@ export default function ClientsPage() {
             subSettings={subSettings}
             hosts={hosts}
             onOpenChange={setQrOpen}
+          />
+        </LazyMount>
+        <LazyMount when={usageOpen}>
+          <ClientUsageModal
+            key={usageEmail}
+            open={usageOpen}
+            email={usageEmail}
+            onOpenChange={setUsageOpen}
           />
         </LazyMount>
         <LazyMount when={bulkAddOpen}>

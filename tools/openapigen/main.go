@@ -116,6 +116,8 @@ func run(root, outDir string) error {
 				"PeerActivity",
 				"HwidSlotStatus",
 				"ForwardSettings",
+				"UsageLogDay",
+				"UsageLogEntry",
 			),
 		},
 		{

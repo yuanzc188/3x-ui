@@ -1224,6 +1224,23 @@ export const TuicServerSettingsSchema = z.object({
 });
 export type TuicServerSettings = z.infer<typeof TuicServerSettingsSchema>;
 
+export const UsageLogDaySchema = z.object({
+  day: z.string(),
+  enabled: z.boolean(),
+  entries: z.array(z.lazy(() => UsageLogEntrySchema)),
+  retentionDays: z.number().int(),
+  truncated: z.boolean(),
+});
+export type UsageLogDay = z.infer<typeof UsageLogDaySchema>;
+
+export const UsageLogEntrySchema = z.object({
+  blocked: z.boolean(),
+  destination: z.string(),
+  outbound: z.string(),
+  time: z.number().int(),
+});
+export type UsageLogEntry = z.infer<typeof UsageLogEntrySchema>;
+
 export const UserSchema = z.object({
   id: z.number().int(),
   password: z.string(),

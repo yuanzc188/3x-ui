@@ -38,6 +38,8 @@ export const keys = {
     onlinesByGuid: () => ['clients', 'onlinesByGuid'] as const,
     activeInbounds: () => ['clients', 'activeInbounds'] as const,
     lastOnline: () => ['clients', 'lastOnline'] as const,
+    usageLog: (email: string, day: string, filter: string) =>
+      ['clients', 'usageLog', email, day, filter] as const,
     groups: () => ['clients', 'groups'] as const,
   },
   xray: {

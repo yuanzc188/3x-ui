@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func writeLogConfig(t *testing.T, accessPath string, errorPath string) {
@@ -88,5 +90,31 @@ func TestPruneXrayLogs_TruncatesOnlyOversizedLogs(t *testing.T) {
 	}
 	if errorInfo.Size() != 0 {
 		t.Fatalf("oversized error log should be truncated, got %d bytes", errorInfo.Size())
+	}
+}
+
+func TestWipeXrayLogs_RecordsClientUsageBeforeTruncating(t *testing.T) {
+	logDir := t.TempDir()
+	t.Setenv("XUI_LOG_FOLDER", logDir)
+	accessLog := filepath.Join(t.TempDir(), "access.log")
+	line := time.Now().Format("2006/01/02 15:04:05.000000") +
+		" from 198.51.100.7:50000 accepted tcp:www.tiktok.com:443 [inbound-443 -> fwd-1] email: alice\n"
+	if err := os.WriteFile(accessLog, []byte(line), 0o644); err != nil {
+		t.Fatalf("seed access log: %v", err)
+	}
+	writeLogConfig(t, accessLog, "none")
+
+	wipeXrayLogs()
+
+	if info, err := os.Stat(accessLog); err != nil || info.Size() != 0 {
+		t.Fatalf("access log should be truncated: %v", err)
+	}
+	files, _ := filepath.Glob(filepath.Join(logDir, "usage", time.Now().Format("2006-01-02"), "*.log"))
+	if len(files) != 1 {
+		t.Fatalf("want one usage file for alice, got %q", files)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil || !strings.Contains(string(data), "\twww.tiktok.com:443\tfwd-1\n") {
+		t.Fatalf("usage file = %q, %v; want the tiktok visit recorded", data, err)
 	}
 }
