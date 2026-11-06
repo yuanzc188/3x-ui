@@ -89,7 +89,7 @@ export default function ForwardList({
           {!knownTags.has(tag) && <Tag color="error">{t('pages.portForward.orphanInbound')}</Tag>}
           {r.sniffingOff && (
             <Tooltip title={t('pages.portForward.sniffingOffHint')}>
-              <Tag color="warning" icon={<WarningOutlined />}>
+              <Tag color="warning" icon={<WarningOutlined aria-hidden />}>
                 {t('pages.portForward.sniffingOff')}
               </Tag>
             </Tooltip>
@@ -131,7 +131,11 @@ export default function ForwardList({
       title: t('pages.portForward.enable'),
       dataIndex: 'enable',
       render: (enable: boolean, r: ForwardRule) => (
-        <Switch checked={enable} onChange={(v) => onToggle(r.id, v)} />
+        <Switch
+          checked={enable}
+          aria-label={t('pages.portForward.enable')}
+          onChange={(v) => onToggle(r.id, v)}
+        />
       ),
     },
     {
@@ -142,7 +146,8 @@ export default function ForwardList({
           <Tooltip title={t('pages.portForward.checkNow')}>
             <Button
               size="small"
-              icon={<ReloadOutlined />}
+              icon={<ReloadOutlined aria-hidden />}
+              aria-label={t('pages.portForward.checkNow')}
               loading={checkingId === r.id}
               onClick={() => runCheck(r.id)}
             />

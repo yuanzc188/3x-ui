@@ -47,10 +47,13 @@ export default function PortForwardPage() {
               title={t('pages.portForward.title')}
               extra={
                 <Space>
-                  <Button icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)}>
+                  <Button
+                    icon={<SettingOutlined aria-hidden />}
+                    onClick={() => setSettingsOpen(true)}
+                  >
                     {t('pages.portForward.settings')}
                   </Button>
-                  <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
+                  <Button type="primary" icon={<PlusOutlined aria-hidden />} onClick={openAdd}>
                     {t('pages.portForward.addRule')}
                   </Button>
                 </Space>
