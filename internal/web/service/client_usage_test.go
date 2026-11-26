@@ -1,8 +1,14 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,9 +16,157 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
+	"github.com/mhsanaei/3x-ui/v3/internal/xray"
 )
 
 var usageBase = time.Date(2026, 11, 6, 10, 0, 0, 0, time.Local)
+
+func TestClientUsageMonitoringPersistsExplicitFalseAndOmittedUpdates(t *testing.T) {
+	setupBulkDB(t)
+	svc := &ClientService{}
+	ib := mkInbound(t, 52124, model.VLESS, `{"clients":[]}`)
+	off := false
+	seed := model.Client{Email: "private@vless", Enable: true, UsageLogEnabled: &off}
+	if _, err := svc.CreateOne(&InboundService{}, ib.Id, seed); err != nil {
+		t.Fatal(err)
+	}
+	updateByEmailJSON(t, svc, seed.Email, `{"comment":"updated"}`)
+	if got := lookupClientRecord(t, seed.Email).UsageLogEnabled; got == nil || *got {
+		t.Fatalf("omitted update changed the setting: %v", got)
+	}
+	disabled, err := usageLogDisabledEmails([]string{seed.Email})
+	if err != nil || !reflect.DeepEqual(disabled, []string{seed.Email}) {
+		t.Fatalf("disabled = %v, err = %v", disabled, err)
+	}
+	updateByEmailJSON(t, svc, seed.Email, `{"usageLogEnabled":true}`)
+	if got := inboundClientByEmail(t, ib.Id, seed.Email).UsageLogEnabled; got == nil || !*got {
+		t.Fatalf("explicit enable did not reach the inbound: %v", got)
+	}
+}
+
+func TestClientUsageMonitoringWithRealXray(t *testing.T) {
+	bin := os.Getenv("XRAY_E2E_BINARY")
+	if bin == "" {
+		t.Skip("set XRAY_E2E_BINARY to run the real-core access log test")
+	}
+	setupBulkDB(t)
+	dir := t.TempDir()
+	t.Setenv("XUI_BIN_FOLDER", dir)
+	t.Setenv("XUI_LOG_FOLDER", dir)
+	if err := os.Symlink(bin, filepath.Join(dir, xray.GetBinaryName())); err != nil {
+		t.Fatal(err)
+	}
+	port := freeLoopbackPort(t)
+	ib := mkInbound(t, port, model.VLESS, `{"clients":[]}`)
+	clientSvc := &ClientService{}
+	firstID, secondID := uuid.New(), uuid.New()
+	off := false
+	for _, c := range []model.Client{
+		{ID: firstID.String(), Email: "legacy", Enable: true},
+		{ID: secondID.String(), Email: "private@1.2.3.4", Enable: true, UsageLogEnabled: &off},
+	} {
+		if _, err := clientSvc.CreateOne(&InboundService{}, ib.Id, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "proxied")
+	}))
+	defer upstream.Close()
+	targetPort := upstream.Listener.Addr().(*net.TCPAddr).Port
+	accessPath := filepath.Join(dir, "access.log")
+	cfg := &xray.Config{
+		LogConfig:       mustJSON(t, map[string]string{"access": accessPath, "loglevel": "warning", "maskAddress": "half"}),
+		OutboundConfigs: []byte(`[{"protocol":"freedom","tag":"direct","settings":{"finalRules":[{"action":"allow","ip":["127.0.0.1"]}]}}]`),
+		InboundConfigs: []xray.InboundConfig{{
+			Port: port, Listen: []byte(`"127.0.0.1"`), Protocol: "vless", Tag: "test",
+			Settings: mustJSON(t, map[string]any{
+				"decryption": "none",
+				"clients": []map[string]string{
+					{"id": firstID.String(), "email": "legacy"},
+					{"id": secondID.String(), "email": "private@1.2.3.4"},
+				},
+			}),
+		}},
+	}
+	core := xray.NewProcess(cfg)
+	if err := core.StartWithAccessLogFilter(usageLogDisabledEmails); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = core.Stop() })
+	visit := func(id uuid.UUID) {
+		t.Helper()
+		const dialTimeout = 50 * time.Millisecond
+		deadline := time.Now().Add(5 * time.Second)
+		var conn net.Conn
+		for {
+			var err error
+			conn, err = net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), dialTimeout)
+			if err == nil {
+				break
+			}
+			if !core.IsRunning() || time.Now().After(deadline) {
+				t.Fatalf("connect to Xray: %v (%s)", err, core.GetResult())
+			}
+			time.Sleep(dialTimeout)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(deadline)
+		packet := append([]byte{0}, id[:]...)
+		packet = binary.BigEndian.AppendUint16(append(packet, 0, 1), uint16(targetPort))
+		packet = append(packet, 1, 127, 0, 0, 1)
+		packet = append(packet, "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n"...)
+		if _, err := conn.Write(packet); err != nil {
+			t.Fatal(err)
+		}
+		reader := bufio.NewReader(conn)
+		if _, err := reader.Discard(2); err != nil {
+			t.Fatalf("read VLESS response header: %v (%s)", err, core.GetResult())
+		}
+		response, err := http.ReadResponse(reader, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil || string(body) != "proxied" {
+			t.Fatalf("proxied response = %q, err = %v", body, err)
+		}
+	}
+	visit(secondID)
+	visit(firstID)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		raw, err := os.ReadFile(accessPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(raw, []byte("email: legacy")) {
+			if bytes.Contains(raw, []byte("email: private@")) {
+				t.Fatalf("opted-out visit was written: %s", raw)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("enabled client's visit was missing: %q (%s)", raw, core.GetResult())
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	usage := &ClientUsageService{}
+	if err := usage.Collect(); err != nil {
+		t.Fatal(err)
+	}
+	for email, want := range map[string]bool{"legacy": true, "private@1.2.3.4": false} {
+		day, err := usage.Day(email, "", "")
+		if err != nil || day.Enabled != want || (len(day.Entries) > 0) != want {
+			t.Fatalf("%q: usage day = %+v, err = %v", email, day, err)
+		}
+	}
+}
 
 func accessLine(at time.Time, dest, detour, email string) string {
 	line := at.Format("2006/01/02 15:04:05.000000") + " from 198.51.100.7:50000 accepted " + dest
@@ -67,7 +221,7 @@ func TestUsageCollect_DedupesPerClientMinuteAndHoldsPartialLine(t *testing.T) {
 			"2026/11/06 10:01:30.000000 from 198.51.100.7:1 rejected  proxy/vless: invalid request user id\n"+
 			"2026/11/06 10:01:50.000000 from 198.51.100.7:50000 accepted tcp:half.example:443 [inbound-443 -> fwd-1] email: bo")
 
-	if err := c.collect(logPath, dir, time.Local, usageBase); err != nil {
+	if err := c.collect(logPath, dir, time.Local, usageBase, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -93,7 +247,7 @@ func TestUsageCollect_ResumesAndRestartsOnTruncateOrReplace(t *testing.T) {
 	c := &usageCollector{}
 	collect := func() {
 		t.Helper()
-		if err := c.collect(logPath, dir, time.Local, usageBase); err != nil {
+		if err := c.collect(logPath, dir, time.Local, usageBase, nil); err != nil {
 			t.Fatal(err)
 		}
 	}

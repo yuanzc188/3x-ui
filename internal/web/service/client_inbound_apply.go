@@ -821,6 +821,9 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 	if newClientId == "" || clientIndex == -1 {
 		return false, common.NewError("empty client ID")
 	}
+	if clients[0].UsageLogEnabled == nil {
+		clients[0].UsageLogEnabled = oldClients[clientIndex].UsageLogEnabled
+	}
 	if strings.TrimSpace(clients[0].Email) == "" {
 		return false, common.NewError("client email is required")
 	}
@@ -923,6 +926,9 @@ func (s *ClientService) UpdateInboundClient(inboundSvc *InboundService, data *mo
 				preservedCreated = time.Now().Unix() * 1000
 			}
 			newMap["created_at"] = preservedCreated
+			if clients[0].UsageLogEnabled != nil {
+				newMap["usageLogEnabled"] = *clients[0].UsageLogEnabled
+			}
 			newSub, _ := newMap["subId"].(string)
 			if strings.TrimSpace(newSub) == "" {
 				if strings.TrimSpace(preservedSubID) != "" {

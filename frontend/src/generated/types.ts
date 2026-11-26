@@ -448,6 +448,7 @@ export interface Client {
   trafficReset?: string;
   trafficResetDay?: number;
   updated_at?: number;
+  usageLogEnabled?: boolean | null;
 }
 
 export interface ClientInbound {
@@ -501,6 +502,7 @@ export interface ClientRecord {
   trafficReset: string;
   trafficResetDay: number;
   updatedAt: number;
+  usageLogEnabled?: boolean | null;
   uuid: string;
 }
 
@@ -1149,6 +1151,7 @@ export interface TuicServerSettings {
 }
 
 export interface UsageLogDay {
+  clientEnabled: boolean;
   day: string;
   enabled: boolean;
   entries: UsageLogEntry[];

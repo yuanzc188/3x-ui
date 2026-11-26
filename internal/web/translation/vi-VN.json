@@ -1057,6 +1057,9 @@
       "usageLogBlocked": "Blocked",
       "usageLogSearch": "Filter by domain",
       "usageLogDisabled": "The Xray access log is off, so new visits are not recorded. Turn it on under Xray Configs → Basics → Log → Access Log.",
+      "usageLogMonitoring": "Theo dõi lượt truy cập trang web",
+      "usageLogMonitoringHint": "Ghi lại lượt truy cập trang web khi nhật ký truy cập Xray được bật.",
+      "usageLogClientDisabled": "Chế độ theo dõi lượt truy cập trang web đã tắt cho máy khách này.",
       "usageLogTruncated": "Showing the newest {n} entries. Pick a domain filter to narrow the list.",
       "renewIntervalDesc": "Sau khi hết hạn, cộng số ngày đã đặt (mỗi ngày 24 giờ) vào thời điểm hết hạn trước đó và đặt lại lưu lượng của khách hàng. Tắt việc đặt lại lưu lượng độc lập trừ khi bạn muốn đặt lại thêm.",
       "renewWeeklyDesc": "Gia hạn theo lịch diễn ra lúc nửa đêm theo múi giờ của bảng điều khiển và cũng đặt lại lưu lượng của khách hàng. Tắt việc đặt lại lưu lượng độc lập trừ khi bạn muốn đặt lại thêm."
@@ -2513,6 +2516,7 @@
       "inbound": "Inbound",
       "destType": "Target Type",
       "destAddress": "Address",
+      "pasteProxyHint": "Dán IP:cổng:tên người dùng:mật khẩu để điền cả bốn trường.",
       "destPort": "Port",
       "username": "Username",
       "password": "Password",

@@ -472,6 +472,7 @@ export const ClientSchema = z.object({
   trafficReset: z.enum(['never', 'hourly', 'daily', 'weekly', 'monthly']).optional(),
   trafficResetDay: z.number().int().min(1).max(31).optional(),
   updated_at: z.number().int().optional(),
+  usageLogEnabled: z.boolean().nullable().optional(),
 });
 export type Client = z.infer<typeof ClientSchema>;
 
@@ -528,6 +529,7 @@ export const ClientRecordSchema = z.object({
   trafficReset: z.string(),
   trafficResetDay: z.number().int(),
   updatedAt: z.number().int(),
+  usageLogEnabled: z.boolean().nullable().optional(),
   uuid: z.string(),
 });
 export type ClientRecord = z.infer<typeof ClientRecordSchema>;
@@ -1225,6 +1227,7 @@ export const TuicServerSettingsSchema = z.object({
 export type TuicServerSettings = z.infer<typeof TuicServerSettingsSchema>;
 
 export const UsageLogDaySchema = z.object({
+  clientEnabled: z.boolean(),
   day: z.string(),
   enabled: z.boolean(),
   entries: z.array(z.lazy(() => UsageLogEntrySchema)),

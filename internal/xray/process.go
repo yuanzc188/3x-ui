@@ -90,7 +90,17 @@ func getLogPath(key string) (string, error) {
 
 // GetAccessLogPath reads the Xray config and returns the access log file path.
 func GetAccessLogPath() (string, error) {
-	return getLogPath("access")
+	data, err := os.ReadFile(GetConfigPath())
+	if err != nil {
+		return "", err
+	}
+	var cfg struct {
+		Log accessLogConfig `json:"log"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return "", err
+	}
+	return cfg.Log.filePath(), nil
 }
 
 // GetErrorLogPath reads the Xray config and returns the error log file path.
@@ -649,7 +659,18 @@ func (p *process) refreshVersion() {
 }
 
 // Start launches the Xray process with the current configuration.
-func (p *process) Start() (err error) {
+func (p *process) Start() error {
+	return p.start(nil)
+}
+
+// StartWithAccessLogFilter launches the managed core with per-client access logs.
+// The filter returns clients with monitoring disabled, given a batch of emails
+// or nil to request all of them when Xray masks addresses.
+func (p *Process) StartWithAccessLogFilter(filter func([]string) ([]string, error)) error {
+	return p.start(filter)
+}
+
+func (p *process) start(filter func([]string) ([]string, error)) (err error) {
 	if p.IsRunning() {
 		return errors.New("xray is already running")
 	}
@@ -680,9 +701,31 @@ func (p *process) Start() (err error) {
 		return common.NewErrorf("Failed to write configuration file: %v", err)
 	}
 
-	cmd := exec.CommandContext(context.Background(), GetBinaryPath(), "-c", configPath)
-	cmd.Stdout = p.logWriter
-	cmd.Stderr = p.logWriter
+	configArg := configPath
+	var runtimeData []byte
+	var accessWriter *accessLogWriter
+	if filter != nil && len(p.config.LogConfig) != 0 {
+		var runtimeCfg *Config
+		runtimeCfg, accessWriter, err = accessLogRuntimeConfig(p.config, p.logWriter, filter)
+		if err != nil {
+			return err
+		}
+		if runtimeCfg != p.config {
+			runtimeData, err = json.Marshal(runtimeCfg)
+			if err != nil {
+				return err
+			}
+			configArg = "stdin:"
+		}
+	}
+	cmd := exec.CommandContext(context.Background(), GetBinaryPath(), "-c", configArg)
+	cmd.Stdout, cmd.Stderr = p.logWriter, p.logWriter
+	if runtimeData != nil {
+		cmd.Stdin = bytes.NewReader(runtimeData)
+	}
+	if accessWriter != nil {
+		cmd.Stdout, cmd.Stderr = accessWriter, accessWriter
+	}
 
 	err = p.startCommand(cmd)
 	if err != nil {
@@ -776,6 +819,9 @@ func (p *process) waitForCommand(cmd *exec.Cmd, done chan struct{}) {
 	defer close(done)
 
 	err := cmd.Wait()
+	if w, ok := cmd.Stdout.(*accessLogWriter); ok {
+		w.flush()
+	}
 	p.logWriter.Flush()
 	if err == nil || p.intentionalStop.Load() {
 		return

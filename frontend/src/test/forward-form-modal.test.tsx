@@ -78,6 +78,29 @@ describe('ForwardFormModal', () => {
     expect((await saved(onSave)).destPort).toBe(10001);
   });
 
+  it.each([
+    ['203.0.113.42:8080:alice:pass:word', '203.0.113.42', 8080, 'alice', 'pass:word'],
+    [' [2001:db8::1]：１０８０：用户：密:码\n', '2001:db8::1', 1080, '用户', '密:码'],
+  ])(
+    'fills and saves all four destination fields from %s',
+    async (text, destAddress, destPort, username, password) => {
+      const onSave = renderModal(rule);
+      const address = document.getElementById('destAddress') as HTMLInputElement;
+      expect(fireEvent.paste(address, { clipboardData: { getData: () => text } })).toBe(false);
+      expect(address.value).toBe(destAddress);
+      expect(await saved(onSave)).toMatchObject({ destAddress, destPort, username, password });
+    },
+  );
+
+  it('leaves a normal address paste and a malformed proxy to the browser', () => {
+    renderModal(rule);
+    const address = document.getElementById('destAddress') as HTMLInputElement;
+    for (const text of ['example.com', 'proxy.example:65536:alice:password']) {
+      expect(fireEvent.paste(address, { clipboardData: { getData: () => text } })).toBe(true);
+    }
+    expect((document.getElementById('destPort') as HTMLInputElement).value).toBe('1080');
+  });
+
   it('opens Add with empty fields after editing another rule', async () => {
     function Harness() {
       const [state, setState] = useState({ open: true, editing: rule as ForwardRule | null });

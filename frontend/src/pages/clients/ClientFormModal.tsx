@@ -175,6 +175,7 @@ const EMPTY: Values = {
   group: '',
   comment: '',
   enable: true,
+  usageLogEnabled: false,
   inboundIds: [],
   externalLinks: [],
   wgPrivateKey: '',
@@ -394,6 +395,7 @@ export default function ClientFormModal({
         group: client.group || '',
         comment: client.comment || '',
         enable: !!client.enable,
+        usageLogEnabled: client.usageLogEnabled ?? true,
         inboundIds: Array.isArray(attachedIds) ? [...attachedIds] : [],
         externalLinks: toExternalLinkRows(attachedExternalLinks),
         wgPrivateKey: client.privateKey || '',
@@ -759,6 +761,7 @@ export default function ClientFormModal({
       group: values.group,
       comment: values.comment,
       enable: values.enable,
+      usageLogEnabled: values.usageLogEnabled,
       inboundIds: values.inboundIds,
     });
     if (!validated.success) {
@@ -797,6 +800,7 @@ export default function ClientFormModal({
       group: values.group,
       comment: values.comment,
       enable: !!values.enable,
+      usageLogEnabled: validated.data.usageLogEnabled,
     };
     // Sent even when empty, so clearing the tag never rests on how the server
     // reads an omitted key.
@@ -1250,6 +1254,14 @@ export default function ClientFormModal({
                         />
                         <span style={{ marginLeft: 8 }}>{t('enable')}</span>
                       </Form.Item>
+                      <FormField
+                        name="usageLogEnabled"
+                        label={t('pages.clients.usageLogMonitoring')}
+                        tooltip={t('pages.clients.usageLogMonitoringHint')}
+                        valueProp="checked"
+                      >
+                        <Switch />
+                      </FormField>
                     </>
                   ),
                 },

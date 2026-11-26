@@ -1057,6 +1057,9 @@
       "usageLogBlocked": "Blocked",
       "usageLogSearch": "Filter by domain",
       "usageLogDisabled": "The Xray access log is off, so new visits are not recorded. Turn it on under Xray Configs → Basics → Log → Access Log.",
+      "usageLogMonitoring": "Web sitesi ziyaretlerini kaydet",
+      "usageLogMonitoringHint": "Xray erişim günlüğü açıkken web sitesi ziyaretlerini kaydeder.",
+      "usageLogClientDisabled": "Bu istemci için web sitesi ziyaretlerinin kaydı kapalı.",
       "usageLogTruncated": "Showing the newest {n} entries. Pick a domain filter to narrow the list.",
       "renewIntervalDesc": "Süre dolduktan sonra önceki bitiş zamanına belirlenen sayıda 24 saatlik gün ekler ve istemci trafiğini sıfırlar. Ek bir sıfırlama istemiyorsanız bağımsız trafik sıfırlamalarını devre dışı bırakın.",
       "renewWeeklyDesc": "Takvim yenilemesi panelin saat diliminde gece yarısı gerçekleşir ve istemci trafiğini de sıfırlar. Ek bir sıfırlama istemiyorsanız bağımsız trafik sıfırlamalarını devre dışı bırakın."
@@ -2513,6 +2516,7 @@
       "inbound": "Inbound",
       "destType": "Target Type",
       "destAddress": "Address",
+      "pasteProxyHint": "Dört alanı doldurmak için IP:port:kullanıcı adı:parola biçiminde yapıştırın.",
       "destPort": "Port",
       "username": "Username",
       "password": "Password",

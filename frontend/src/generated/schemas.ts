@@ -1866,6 +1866,11 @@ export const SCHEMAS: Record<string, unknown> = {
         "description": "Last update timestamp",
         "format": "int64",
         "type": "integer"
+      },
+      "usageLogEnabled": {
+        "description": "Omission preserves the previous setting. Legacy clients log when Xray access logging is on.",
+        "nullable": true,
+        "type": "boolean"
       }
     },
     "required": [
@@ -2077,6 +2082,10 @@ export const SCHEMAS: Record<string, unknown> = {
       "updatedAt": {
         "format": "int64",
         "type": "integer"
+      },
+      "usageLogEnabled": {
+        "nullable": true,
+        "type": "boolean"
       },
       "uuid": {
         "type": "string"
@@ -5046,6 +5055,10 @@ export const SCHEMAS: Record<string, unknown> = {
   "UsageLogDay": {
     "description": "UsageLogDay is one client's usage on one day of the panel's time zone, newest first.",
     "properties": {
+      "clientEnabled": {
+        "example": true,
+        "type": "boolean"
+      },
       "day": {
         "example": "2025-01-01",
         "type": "string"
@@ -5070,6 +5083,7 @@ export const SCHEMAS: Record<string, unknown> = {
       }
     },
     "required": [
+      "clientEnabled",
       "day",
       "enabled",
       "entries",

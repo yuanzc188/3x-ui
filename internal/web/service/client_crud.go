@@ -247,6 +247,9 @@ func (s *ClientService) Create(inboundSvc *InboundService, payload *ClientCreate
 		}
 		// Reuse stored credentials when re-adding an existing identity, or
 		// fillProtocolDefaults mints a fresh UUID that desyncs other inbounds.
+		if client.UsageLogEnabled == nil {
+			client.UsageLogEnabled = existing.UsageLogEnabled
+		}
 		if client.ID == "" {
 			client.ID = existing.UUID
 		}
@@ -739,6 +742,9 @@ func (s *ClientService) update(inboundSvc *InboundService, id int, updated model
 	}
 	normalizeClientTrafficReset(&updated)
 	updated.ClientHostRuleIds = model.NormalizeClientHostRuleIds(updated.ClientHostRuleIds)
+	if updated.UsageLogEnabled == nil {
+		updated.UsageLogEnabled = existing.UsageLogEnabled
+	}
 	if updated.SubID == "" {
 		updated.SubID = existing.SubID
 	}
@@ -914,6 +920,7 @@ func (s *ClientService) update(inboundSvc *InboundService, id int, updated model
 				"wg_keep_alive":        keepAliveLegacy,
 				"wg_keep_alive_range":  keepAliveRange,
 				"limit_ip":             merged.LimitIP,
+				"usage_log_enabled":    merged.UsageLogEnabled,
 				"total_gb":             merged.TotalGB,
 				"expiry_time":          merged.ExpiryTime,
 				"tg_id":                merged.TgID,

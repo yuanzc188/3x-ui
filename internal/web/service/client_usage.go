@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -13,8 +14,11 @@ import (
 	"strings"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/mhsanaei/3x-ui/v3/internal/config"
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
+	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 )
 
 // usageRetentionDays counts today, so the oldest kept day is today-29.
@@ -42,6 +46,7 @@ type UsageLogEntry struct {
 type UsageLogDay struct {
 	Day           string          `json:"day" example:"2025-01-01"`
 	Enabled       bool            `json:"enabled" example:"true"`
+	ClientEnabled bool            `json:"clientEnabled" example:"true"`
 	RetentionDays int             `json:"retentionDays" example:"30"`
 	Truncated     bool            `json:"truncated" example:"false"`
 	Entries       []UsageLogEntry `json:"entries"`
@@ -61,17 +66,45 @@ func (s *ClientUsageService) Day(email, day, filter string) (*UsageLogDay, error
 		return nil, err
 	}
 	enabled, _ := (&SettingService{}).GetAccessLogEnable()
+	disabled, err := usageLogDisabledEmails([]string{email})
+	if err != nil {
+		return nil, err
+	}
 	entries, truncated, err := readUsageDay(usageLogDir(), resolved, email, filter, s.blockedTags())
 	if err != nil {
 		return nil, err
 	}
 	return &UsageLogDay{
 		Day:           resolved,
-		Enabled:       enabled,
+		Enabled:       enabled && len(disabled) == 0,
+		ClientEnabled: len(disabled) == 0,
 		RetentionDays: usageRetentionDays,
 		Truncated:     truncated,
 		Entries:       entries,
 	}, nil
+}
+
+func usageLogDisabledEmails(emails []string) ([]string, error) {
+	db := database.GetDB()
+	if db == nil {
+		return nil, errors.New("client usage log settings database is unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	query := db.WithContext(ctx).Model(&model.ClientRecord{}).Where("usage_log_enabled = ?", false).Session(&gorm.Session{})
+	var disabled []string
+	if len(emails) == 0 {
+		err := query.Pluck("email", &disabled).Error
+		return disabled, err
+	}
+	for _, batch := range chunkStrings(emails, sqlInChunk) {
+		var rows []string
+		if err := query.Where("email IN ?", batch).Pluck("email", &rows).Error; err != nil {
+			return nil, err
+		}
+		disabled = append(disabled, rows...)
+	}
+	return disabled, nil
 }
 
 // UsageExport streams one client's whole day, oldest first, as a download. Unlike the

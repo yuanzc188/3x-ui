@@ -63,6 +63,7 @@ const EMPTY: ClientBulkAddFormValues = {
   resetMax: 0,
   trafficReset: 'never' as const,
   trafficResetDay: 1,
+  usageLogEnabled: false,
   inboundIds: [],
 };
 
@@ -215,6 +216,7 @@ export default function ClientBulkAddModal({
           group: current.group,
           comment: current.comment,
           enable: true,
+          usageLogEnabled: current.usageLogEnabled,
         },
         inboundIds: current.inboundIds,
       }));
@@ -370,6 +372,14 @@ export default function ClientBulkAddModal({
 
             <FormField name="comment" label={t('comment')}>
               <Input />
+            </FormField>
+            <FormField
+              name="usageLogEnabled"
+              label={t('pages.clients.usageLogMonitoring')}
+              tooltip={t('pages.clients.usageLogMonitoringHint')}
+              valueProp="checked"
+            >
+              <Switch />
             </FormField>
 
             {showFlow && (

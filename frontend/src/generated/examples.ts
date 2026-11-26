@@ -452,7 +452,8 @@ export const EXAMPLES: Record<string, unknown> = {
     "totalGB": 0,
     "trafficReset": "never",
     "trafficResetDay": 1,
-    "updated_at": 0
+    "updated_at": 0,
+    "usageLogEnabled": null
   },
   "ClientInbound": {
     "clientId": 0,
@@ -547,6 +548,7 @@ export const EXAMPLES: Record<string, unknown> = {
     "trafficReset": "",
     "trafficResetDay": 0,
     "updatedAt": 0,
+    "usageLogEnabled": null,
     "uuid": ""
   },
   "ClientRenewalPreview": {
@@ -1259,6 +1261,7 @@ export const EXAMPLES: Record<string, unknown> = {
     "zero_rtt_handshake": false
   },
   "UsageLogDay": {
+    "clientEnabled": true,
     "day": "2025-01-01",
     "enabled": true,
     "entries": [

@@ -1057,6 +1057,9 @@
       "usageLogBlocked": "Blocked",
       "usageLogSearch": "Filter by domain",
       "usageLogDisabled": "The Xray access log is off, so new visits are not recorded. Turn it on under Xray Configs → Basics → Log → Access Log.",
+      "usageLogMonitoring": "مراقبة زيارات المواقع",
+      "usageLogMonitoringHint": "يسجل زيارات المواقع عند تشغيل سجل وصول Xray.",
+      "usageLogClientDisabled": "مراقبة زيارات المواقع متوقفة لهذا العميل.",
       "usageLogTruncated": "Showing the newest {n} entries. Pick a domain filter to narrow the list.",
       "renewIntervalDesc": "بعد انتهاء الصلاحية، يُضاف عدد الأيام المحدد (24 ساعة لكل يوم) إلى الموعد النهائي السابق ويُعاد تعيين استهلاك العميل. أبقِ إعادة تعيين الاستهلاك المستقلة معطلة ما لم تكن تريد إعادة تعيين إضافية.",
       "renewWeeklyDesc": "يتم التجديد التقويمي عند منتصف الليل بتوقيت اللوحة ويُعاد أيضًا تعيين استهلاك العميل. أبقِ إعادة تعيين الاستهلاك المستقلة معطلة ما لم تكن تريد إعادة تعيين إضافية."
@@ -2513,6 +2516,7 @@
       "inbound": "Inbound",
       "destType": "Target Type",
       "destAddress": "Address",
+      "pasteProxyHint": "ألصق IP:المنفذ:اسم المستخدم:كلمة المرور لملء الحقول الأربعة.",
       "destPort": "Port",
       "username": "Username",
       "password": "Password",

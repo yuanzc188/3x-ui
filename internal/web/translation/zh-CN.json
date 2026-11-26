@@ -1057,6 +1057,9 @@
       "usageLogBlocked": "已拦截",
       "usageLogSearch": "按域名筛选",
       "usageLogDisabled": "Xray 访问日志未开启，新的访问不会被记录。请在 Xray 配置 → 基础配置 → 日志 → 访问日志 中开启。",
+      "usageLogMonitoring": "网站访问日志监控",
+      "usageLogMonitoringHint": "开启后，Xray 访问日志总开关开启时才记录此客户端的网站访问。",
+      "usageLogClientDisabled": "此客户端的网站访问日志监控已关闭。",
       "usageLogTruncated": "只显示最新的 {n} 条，可按域名筛选缩小范围。",
       "renewIntervalDesc": "到期后从上次截止时间增加指定天数（每天 24 小时），并重置客户端流量。若不需要额外重置，请关闭独立的流量重置。",
       "renewWeeklyDesc": "日历续期按面板时区的午夜执行，并重置客户端流量。若不需要额外重置，请关闭独立的流量重置。"
@@ -2513,6 +2516,7 @@
       "inbound": "入站",
       "destType": "目标类型",
       "destAddress": "地址",
+      "pasteProxyHint": "可在此粘贴 IP:端口:用户名:密码，自动填入四项。",
       "destPort": "端口",
       "username": "用户名",
       "password": "密码",

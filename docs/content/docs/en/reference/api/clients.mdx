@@ -255,10 +255,12 @@ _openapi:
     - depth: 2
       title: Destinations (host:port) the client opened on one day of the panel time
         zone, newest first, one entry per destination per minute, kept for
-        retentionDays days. Recorded from the Xray access log every 10 minutes;
-        enabled=false means the access log is off, so nothing new is recorded.
-        At most 5000 entries; truncated=true means older ones were left out.
-      url: '#destinations-hostport-the-client-opened-on-one-day-of-the-panel-time-zone-newest-first-one-entry-per-destination-per-minute-kept-for-retentiondays-days-recorded-from-the-xray-access-log-every-10-minutes-enabledfalse-means-the-access-log-is-off-so-nothing-new-is-recorded-at-most-5000-entries-truncatedtrue-means-older-ones-were-left-out'
+        retentionDays days. New visits require both Xray access logging and
+        client monitoring (enabled=true). clientEnabled reports the client
+        setting. The collector reads the access log every 10 minutes. The
+        response includes up to 5000 entries. truncated=true indicates that
+        older entries are available in the download.
+      url: '#destinations-hostport-the-client-opened-on-one-day-of-the-panel-time-zone-newest-first-one-entry-per-destination-per-minute-kept-for-retentiondays-days-new-visits-require-both-xray-access-logging-and-client-monitoring-enabledtrue-clientenabled-reports-the-client-setting-the-collector-reads-the-access-log-every-10-minutes-the-response-includes-up-to-5000-entries-truncatedtrue-indicates-that-older-entries-are-available-in-the-download'
     - depth: 2
       title: 'Stream the client’s whole day as an attachment
         (usage_<email>_<day>.log), oldest first and without the 5000-entry cap:
@@ -548,11 +550,12 @@ _openapi:
         id: list-source-ips-that-have-connected-with-the-given-clients-credentials-returns-an-array-of-ip-timestamp-strings
       - content: Destinations (host:port) the client opened on one day of the panel time
           zone, newest first, one entry per destination per minute, kept for
-          retentionDays days. Recorded from the Xray access log every 10
-          minutes; enabled=false means the access log is off, so nothing new is
-          recorded. At most 5000 entries; truncated=true means older ones were
-          left out.
-        id: destinations-hostport-the-client-opened-on-one-day-of-the-panel-time-zone-newest-first-one-entry-per-destination-per-minute-kept-for-retentiondays-days-recorded-from-the-xray-access-log-every-10-minutes-enabledfalse-means-the-access-log-is-off-so-nothing-new-is-recorded-at-most-5000-entries-truncatedtrue-means-older-ones-were-left-out
+          retentionDays days. New visits require both Xray access logging and
+          client monitoring (enabled=true). clientEnabled reports the client
+          setting. The collector reads the access log every 10 minutes. The
+          response includes up to 5000 entries. truncated=true indicates that
+          older entries are available in the download.
+        id: destinations-hostport-the-client-opened-on-one-day-of-the-panel-time-zone-newest-first-one-entry-per-destination-per-minute-kept-for-retentiondays-days-new-visits-require-both-xray-access-logging-and-client-monitoring-enabledtrue-clientenabled-reports-the-client-setting-the-collector-reads-the-access-log-every-10-minutes-the-response-includes-up-to-5000-entries-truncatedtrue-indicates-that-older-entries-are-available-in-the-download
       - content: 'Stream the client’s whole day as an attachment
           (usage_<email>_<day>.log), oldest first and without the 5000-entry
           cap: a header row, then one "time<TAB>destination<TAB>route" line per

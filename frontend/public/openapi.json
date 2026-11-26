@@ -1892,6 +1892,11 @@
             "description": "Last update timestamp",
             "format": "int64",
             "type": "integer"
+          },
+          "usageLogEnabled": {
+            "description": "Omission preserves the previous setting. Legacy clients log when Xray access logging is on.",
+            "nullable": true,
+            "type": "boolean"
           }
         },
         "required": [
@@ -2103,6 +2108,10 @@
           "updatedAt": {
             "format": "int64",
             "type": "integer"
+          },
+          "usageLogEnabled": {
+            "nullable": true,
+            "type": "boolean"
           },
           "uuid": {
             "type": "string"
@@ -5072,6 +5081,10 @@
       "UsageLogDay": {
         "description": "UsageLogDay is one client's usage on one day of the panel's time zone, newest first.",
         "properties": {
+          "clientEnabled": {
+            "example": true,
+            "type": "boolean"
+          },
           "day": {
             "example": "2025-01-01",
             "type": "string"
@@ -5096,6 +5109,7 @@
           }
         },
         "required": [
+          "clientEnabled",
           "day",
           "enabled",
           "entries",
@@ -10982,7 +10996,7 @@
         "tags": [
           "Clients"
         ],
-        "summary": "Destinations (host:port) the client opened on one day of the panel time zone, newest first, one entry per destination per minute, kept for retentionDays days. Recorded from the Xray access log every 10 minutes; enabled=false means the access log is off, so nothing new is recorded. At most 5000 entries; truncated=true means older ones were left out.",
+        "summary": "Destinations (host:port) the client opened on one day of the panel time zone, newest first, one entry per destination per minute, kept for retentionDays days. New visits require both Xray access logging and client monitoring (enabled=true). clientEnabled reports the client setting. The collector reads the access log every 10 minutes. The response includes up to 5000 entries. truncated=true indicates that older entries are available in the download.",
         "operationId": "get_panel_api_clients_usageLog_email",
         "parameters": [
           {
@@ -11035,6 +11049,7 @@
                 "example": {
                   "success": true,
                   "obj": {
+                    "clientEnabled": true,
                     "day": "2025-01-01",
                     "enabled": true,
                     "entries": [

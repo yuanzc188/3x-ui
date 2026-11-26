@@ -42,6 +42,7 @@ export const ClientRecordSchema = z
     group: z.string().optional(),
     comment: z.string().optional(),
     enable: z.boolean().optional(),
+    usageLogEnabled: z.boolean().nullish(),
     reset: z.number().optional(),
     resetDay: z.number().optional(),
     resetWeekday: z.number().optional(),
@@ -345,6 +346,7 @@ export const ClientFormSchema = z.object({
   group: z.string(),
   comment: z.string(),
   enable: z.boolean(),
+  usageLogEnabled: z.boolean(),
   inboundIds: z.array(z.number()),
 });
 
@@ -384,6 +386,7 @@ export const ClientBulkAdjustFormSchema = z
   );
 
 export const ClientBulkAddFormSchema = z.object({
+  usageLogEnabled: z.boolean(),
   emailMethod: z.number().int().min(0).max(4),
   firstNum: z.number().int().min(1),
   lastNum: z.number().int().min(1),

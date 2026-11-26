@@ -6,7 +6,7 @@ import dayjs from 'dayjs';
 
 import { useInboundOptions } from '@/api/queries/useInboundOptions';
 import { DateTimePicker } from '@/components/form';
-import { inboundAlreadyBound, parsePastedPort } from '../helpers';
+import { inboundAlreadyBound, parsePastedPort, parsePastedProxy } from '../helpers';
 import type { ForwardRule } from '../types';
 
 interface Props {
@@ -71,6 +71,13 @@ export default function ForwardFormModal({ open, editing, rules, onCancel, onSav
     form.setFields([{ name: 'destPort', value: port, errors: [] }]);
   };
 
+  const pasteProxy = (e: ClipboardEvent<HTMLInputElement>) => {
+    const proxy = parsePastedProxy(e.clipboardData.getData('text'));
+    if (!proxy) return;
+    e.preventDefault();
+    form.setFieldsValue(proxy);
+  };
+
   const inboundOptions = useMemo(
     () =>
       inbounds
@@ -128,9 +135,10 @@ export default function ForwardFormModal({ open, editing, rules, onCancel, onSav
           <Form.Item
             name="destAddress"
             label={t('pages.portForward.destAddress')}
+            extra={t('pages.portForward.pasteProxyHint')}
             rules={[{ required: true }]}
           >
-            <Input placeholder="1.2.3.4" />
+            <Input placeholder="1.2.3.4" onPaste={pasteProxy} />
           </Form.Item>
           <Form.Item
             name="destPort"

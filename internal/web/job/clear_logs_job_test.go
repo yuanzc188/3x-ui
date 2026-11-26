@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mhsanaei/3x-ui/v3/internal/database/dbtest"
 )
 
 func writeLogConfig(t *testing.T, accessPath string, errorPath string) {
@@ -94,6 +96,7 @@ func TestPruneXrayLogs_TruncatesOnlyOversizedLogs(t *testing.T) {
 }
 
 func TestWipeXrayLogs_RecordsClientUsageBeforeTruncating(t *testing.T) {
+	dbtest.InitDB(t, filepath.Join(t.TempDir(), "x-ui.db"))
 	logDir := t.TempDir()
 	t.Setenv("XUI_LOG_FOLDER", logDir)
 	accessLog := filepath.Join(t.TempDir(), "access.log")
@@ -109,7 +112,7 @@ func TestWipeXrayLogs_RecordsClientUsageBeforeTruncating(t *testing.T) {
 	if info, err := os.Stat(accessLog); err != nil || info.Size() != 0 {
 		t.Fatalf("access log should be truncated: %v", err)
 	}
-	files, _ := filepath.Glob(filepath.Join(logDir, "usage", time.Now().Format("2006-01-02"), "*.log"))
+	files, _ := filepath.Glob(filepath.Join(logDir, "usage", "*", "*.log"))
 	if len(files) != 1 {
 		t.Fatalf("want one usage file for alice, got %q", files)
 	}

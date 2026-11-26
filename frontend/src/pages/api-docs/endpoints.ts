@@ -1679,7 +1679,7 @@ export const sections: readonly Section[] = [
         method: 'GET',
         path: '/panel/api/clients/usageLog/:email',
         summary:
-          'Destinations (host:port) the client opened on one day of the panel time zone, newest first, one entry per destination per minute, kept for retentionDays days. Recorded from the Xray access log every 10 minutes; enabled=false means the access log is off, so nothing new is recorded. At most 5000 entries; truncated=true means older ones were left out.',
+          'Destinations (host:port) the client opened on one day of the panel time zone, newest first, one entry per destination per minute, kept for retentionDays days. New visits require both Xray access logging and client monitoring (enabled=true). clientEnabled reports the client setting. The collector reads the access log every 10 minutes. The response includes up to 5000 entries. truncated=true indicates that older entries are available in the download.',
         params: [
           { name: 'email', in: 'path', type: 'string', desc: 'Client email.' },
           {

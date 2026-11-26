@@ -46,10 +46,21 @@ func (s *ClientUsageService) Collect() error {
 		accessPath = ""
 	}
 	loc := usageLocation()
-	return defaultUsageCollector.collect(accessPath, usageLogDir(), loc, time.Now().In(loc))
+	var disabled map[string]bool
+	if accessPath != "" {
+		emails, err := usageLogDisabledEmails(nil)
+		if err != nil {
+			return err
+		}
+		disabled = make(map[string]bool, len(emails))
+		for _, email := range emails {
+			disabled[strings.ToLower(email)] = true
+		}
+	}
+	return defaultUsageCollector.collect(accessPath, usageLogDir(), loc, time.Now().In(loc), disabled)
 }
 
-func (c *usageCollector) collect(accessPath, dir string, loc *time.Location, now time.Time) (err error) {
+func (c *usageCollector) collect(accessPath, dir string, loc *time.Location, now time.Time, disabled map[string]bool) (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := pruneUsageDays(dir, now); err != nil {
@@ -63,10 +74,10 @@ func (c *usageCollector) collect(accessPath, dir string, loc *time.Location, now
 			c.seen = nil
 		}
 	}()
-	return c.drain(accessPath, dir, loc)
+	return c.drain(accessPath, dir, loc, disabled)
 }
 
-func (c *usageCollector) drain(accessPath, dir string, loc *time.Location) error {
+func (c *usageCollector) drain(accessPath, dir string, loc *time.Location, disabled map[string]bool) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -80,7 +91,7 @@ func (c *usageCollector) drain(accessPath, dir string, loc *time.Location) error
 		return err
 	}
 	defer file.Close()
-	batch := usageBatch{collector: c, loc: loc, files: map[string]*bytes.Buffer{}}
+	batch := usageBatch{collector: c, loc: loc, files: map[string]*bytes.Buffer{}, disabled: disabled}
 	if err := scanUsage(file, &cur, &batch); err != nil {
 		return err
 	}
@@ -157,11 +168,12 @@ type usageBatch struct {
 	collector *usageCollector
 	loc       *time.Location
 	files     map[string]*bytes.Buffer
+	disabled  map[string]bool
 }
 
 func (b *usageBatch) add(line string) {
 	rec, ok := parseUsageAccessLine(line)
-	if !ok || !b.collector.firstInMinute(rec) {
+	if !ok || b.disabled[strings.ToLower(rec.email)] || !b.collector.firstInMinute(rec) {
 		return
 	}
 	key := filepath.Join(rec.at.In(b.loc).Format(usageDayLayout), usageFileName(rec.email))
@@ -239,10 +251,11 @@ type usageAccess struct {
 // parseUsageAccessLine reads an accepted client line of the Xray access log:
 // "<date> <time> from <src> accepted <net>:<host>:<port> [<detour>] email: <email>".
 func parseUsageAccessLine(line string) (usageAccess, bool) {
-	head, email, ok := strings.Cut(strings.TrimRight(line, "\r\n"), " email: ")
-	if !ok || email == "" {
+	email := xray.AccessLogClientEmail(line)
+	if email == "" {
 		return usageAccess{}, false
 	}
+	head := strings.TrimSuffix(strings.TrimRight(line, "\r\n"), " email: "+email)
 	at, ok := parseAccessTime(head)
 	if !ok {
 		return usageAccess{}, false

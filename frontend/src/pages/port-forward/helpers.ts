@@ -33,6 +33,25 @@ export function parsePastedPort(text: string): number | null {
   return n >= 1 && n <= 65535 ? n : null;
 }
 
+export function parsePastedProxy(text: string) {
+  const value = text.trimStart().replace(/(?:\r?\n)+$/, '');
+  // IPv6 needs brackets to distinguish its colons from the field separators.
+  const parts = /^(\[[\da-f:.]+\]|[^\s:/：]+)\s*[:：]\s*([^:：]+)[:：]([^:：]*)[:：](.*)$/iu.exec(
+    value,
+  );
+  if (!parts || /[\r\n]/.test(value)) return null;
+  const [, host, portText, username, password] = parts;
+  const destPort = parsePastedPort(portText);
+  if (destPort === null || !/^[\p{L}\p{N}._-]+$|^\[[\da-f:.]+\]$/iu.test(host)) return null;
+  try {
+    new URL(`http://${host}`);
+  } catch {
+    return null;
+  }
+  const destAddress = host.startsWith('[') ? host.slice(1, -1) : host;
+  return { destAddress, destPort, username, password };
+}
+
 export type ExpiryLevel = 'none' | 'ok' | 'soon' | 'expired';
 
 const SOON_MS = 3 * 86_400_000;

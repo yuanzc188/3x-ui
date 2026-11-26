@@ -15,6 +15,7 @@ describe('ClientUsageModal', () => {
     const get = serve({
       day: '2026-11-06',
       enabled: true,
+      clientEnabled: true,
       retentionDays: 30,
       truncated: false,
       entries: [
@@ -70,6 +71,7 @@ describe('ClientUsageModal', () => {
     serve({
       day: '2026-11-06',
       enabled: true,
+      clientEnabled: true,
       retentionDays: 30,
       truncated: true,
       entries: [
@@ -108,11 +110,41 @@ describe('ClientUsageModal', () => {
   });
 
   it('warns when the access log is off and when the list was cut short', async () => {
-    serve({ day: '2026-11-06', enabled: false, retentionDays: 30, truncated: true, entries: [] });
+    serve({
+      day: '2026-11-06',
+      enabled: false,
+      clientEnabled: true,
+      retentionDays: 30,
+      truncated: true,
+      entries: [],
+    });
     renderWithProviders(<ClientUsageModal open email="alice" onOpenChange={() => {}} />);
 
     expect(await screen.findByText(/Xray access log is off/)).toBeTruthy();
     expect(screen.getByText(/Showing the newest 0 entries/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Download' })).toHaveProperty('disabled', true);
+  });
+
+  it('shows the client monitoring status and still displays past visits', async () => {
+    serve({
+      day: '2026-11-06',
+      enabled: false,
+      clientEnabled: false,
+      retentionDays: 30,
+      truncated: false,
+      entries: [
+        {
+          time: 1793944860000,
+          destination: 'previous.example:443',
+          outbound: 'direct',
+          blocked: false,
+        },
+      ],
+    });
+    renderWithProviders(<ClientUsageModal open email="alice" onOpenChange={() => {}} />);
+    expect(
+      await screen.findByText('Website visit monitoring is off for this client.'),
+    ).toBeTruthy();
+    expect(screen.getByText('previous.example:443')).toBeTruthy();
   });
 });

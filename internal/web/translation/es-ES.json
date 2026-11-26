@@ -1057,6 +1057,9 @@
       "usageLogBlocked": "Blocked",
       "usageLogSearch": "Filter by domain",
       "usageLogDisabled": "The Xray access log is off, so new visits are not recorded. Turn it on under Xray Configs → Basics → Log → Access Log.",
+      "usageLogMonitoring": "Registrar visitas a sitios web",
+      "usageLogMonitoringHint": "Registra las visitas cuando el registro de acceso de Xray está activado.",
+      "usageLogClientDisabled": "El registro de visitas está desactivado para este cliente.",
       "usageLogTruncated": "Showing the newest {n} entries. Pick a domain filter to narrow the list.",
       "renewIntervalDesc": "Tras expirar, añade el número configurado de días de 24 horas al vencimiento anterior y reinicia el tráfico del cliente. Mantén desactivados los reinicios de tráfico independientes salvo que quieras un reinicio adicional.",
       "renewWeeklyDesc": "La renovación por calendario se realiza a medianoche en la zona horaria del panel y también reinicia el tráfico del cliente. Mantén desactivados los reinicios de tráfico independientes salvo que quieras un reinicio adicional."
@@ -2513,6 +2516,7 @@
       "inbound": "Inbound",
       "destType": "Target Type",
       "destAddress": "Address",
+      "pasteProxyHint": "Pega IP:puerto:usuario:contraseña para completar los cuatro campos.",
       "destPort": "Port",
       "username": "Username",
       "password": "Password",

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import ClientFormModal from '@/pages/clients/ClientFormModal';
@@ -70,4 +70,12 @@ describe('ClientFormModal credential tooltips', () => {
       );
     });
   });
+});
+
+it('lets the operator enable website visit monitoring for a new client', () => {
+  renderModal();
+  const monitoring = screen.getByRole('switch', { name: 'Monitor website visits' });
+  expect(monitoring.getAttribute('aria-checked')).toBe('false');
+  fireEvent.click(monitoring);
+  expect(monitoring.getAttribute('aria-checked')).toBe('true');
 });

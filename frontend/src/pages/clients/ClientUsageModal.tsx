@@ -139,7 +139,15 @@ export default function ClientUsageModal({ open, email, onOpenChange }: ClientUs
           {t('pages.clients.usageLogHint', { days: data?.retentionDays ?? 30 })}
         </Typography.Text>
         {data && !data.enabled && (
-          <Alert type="warning" showIcon title={t('pages.clients.usageLogDisabled')} />
+          <Alert
+            type="warning"
+            showIcon
+            title={t(
+              data.clientEnabled === false
+                ? 'pages.clients.usageLogClientDisabled'
+                : 'pages.clients.usageLogDisabled',
+            )}
+          />
         )}
         {error && <Alert type="error" showIcon title={(error as Error).message} />}
         <UsageToolbar

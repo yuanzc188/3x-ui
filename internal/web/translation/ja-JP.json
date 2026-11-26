@@ -1057,6 +1057,9 @@
       "usageLogBlocked": "Blocked",
       "usageLogSearch": "Filter by domain",
       "usageLogDisabled": "The Xray access log is off, so new visits are not recorded. Turn it on under Xray Configs → Basics → Log → Access Log.",
+      "usageLogMonitoring": "ウェブサイトへのアクセスを記録",
+      "usageLogMonitoringHint": "Xray のアクセスログが有効なときにウェブサイトへのアクセスを記録します。",
+      "usageLogClientDisabled": "このクライアントのウェブサイトアクセス記録は無効です。",
       "usageLogTruncated": "Showing the newest {n} entries. Pick a domain filter to narrow the list.",
       "renewIntervalDesc": "期限切れ後、前回の期限に指定日数（1 日 24 時間）を加算し、クライアントの通信量をリセットします。追加のリセットが不要なら、独立した通信量リセットは無効にしてください。",
       "renewWeeklyDesc": "カレンダー更新はパネルのタイムゾーンの午前 0 時に行われ、クライアントの通信量もリセットします。追加のリセットが不要なら、独立した通信量リセットは無効にしてください。"
@@ -2513,6 +2516,7 @@
       "inbound": "Inbound",
       "destType": "Target Type",
       "destAddress": "Address",
+      "pasteProxyHint": "IP:ポート:ユーザー名:パスワードを貼り付けると、4 項目が自動入力されます。",
       "destPort": "Port",
       "username": "Username",
       "password": "Password",

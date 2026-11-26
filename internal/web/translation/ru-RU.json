@@ -1057,6 +1057,9 @@
       "usageLogBlocked": "Blocked",
       "usageLogSearch": "Filter by domain",
       "usageLogDisabled": "The Xray access log is off, so new visits are not recorded. Turn it on under Xray Configs → Basics → Log → Access Log.",
+      "usageLogMonitoring": "Записывать посещения сайтов",
+      "usageLogMonitoringHint": "Записывает посещения при включённом журнале доступа Xray.",
+      "usageLogClientDisabled": "Запись посещений сайтов для этого клиента отключена.",
       "usageLogTruncated": "Showing the newest {n} entries. Pick a domain filter to narrow the list.",
       "renewIntervalDesc": "После истечения срока добавляет указанное число 24-часовых дней к предыдущему сроку и сбрасывает трафик клиента. Оставьте независимый сброс трафика выключенным, если дополнительный сброс не нужен.",
       "renewWeeklyDesc": "Календарное продление выполняется в полночь по часовому поясу панели и также сбрасывает трафик клиента. Оставьте независимый сброс трафика выключенным, если дополнительный сброс не нужен."
@@ -2513,6 +2516,7 @@
       "inbound": "Inbound",
       "destType": "Target Type",
       "destAddress": "Address",
+      "pasteProxyHint": "Вставьте IP:порт:имя пользователя:пароль, чтобы заполнить все четыре поля.",
       "destPort": "Port",
       "username": "Username",
       "password": "Password",
